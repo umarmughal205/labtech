@@ -1,0 +1,560 @@
+import React, { useState, useEffect } from "react";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { 
+  Settings as SettingsIcon, 
+  Building, 
+  DollarSign, 
+  Globe, 
+  Bell,
+  Save,
+  ArrowLeft
+} from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { api } from "@/lab lib/api";
+
+// Types for settings
+type LabSettings = {
+  labName: string;
+  address: string;
+  phone: string;
+  email: string;
+  website: string;
+  license: string;
+  currency: string;
+  timezone: string;
+  defaultLanguage: string;
+  directorName?: string;
+  accreditationBody?: string;
+};
+
+type PricingSettings = {
+  defaultCurrency: string;
+  taxRate: number;
+  bulkDiscountRate: number;
+};
+
+type NotificationSettings = {
+  emailNotifications: boolean;
+  smsNotifications: boolean;
+  criticalAlerts: boolean;
+  reportReady: boolean;
+  appointmentReminders: boolean;
+  systemMaintenance: boolean;
+};
+
+type BackupSettings = {
+  enabled: boolean;
+  time: string; // HH:MM 24h
+};
+
+// Default settings (neutral/empty values; real data will come from backend)
+const DEFAULT_LAB_SETTINGS: LabSettings = {
+  labName: "",
+  address: "",
+  phone: "",
+  email: "",
+  website: "",
+  license: "",
+  currency: "",
+  timezone: "",
+  defaultLanguage: "",
+  directorName: "",
+  accreditationBody: "",
+};
+
+const DEFAULT_PRICING_SETTINGS: PricingSettings = {
+  defaultCurrency: "PKR",
+  taxRate: 0,
+  bulkDiscountRate: 0,
+};
+
+const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
+  emailNotifications: false,
+  smsNotifications: false,
+  criticalAlerts: false,
+  reportReady: false,
+  appointmentReminders: false,
+  systemMaintenance: false,
+};
+
+const DEFAULT_BACKUP_SETTINGS: BackupSettings = {
+  enabled: false,
+  time: "02:00",
+};
+
+const Settings = () => {
+  const [labSettings, setLabSettings] = useState<LabSettings>(DEFAULT_LAB_SETTINGS);
+
+  const [pricingSettings, setPricingSettings] = useState<PricingSettings>(DEFAULT_PRICING_SETTINGS);
+
+  const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>(DEFAULT_NOTIFICATION_SETTINGS);
+
+  const [backupSettings, setBackupSettings] = useState<BackupSettings>(DEFAULT_BACKUP_SETTINGS);
+
+  const { toast } = useToast();
+
+  const [isSaving, setIsSaving] = useState(false);
+  const fileRef = React.useRef<HTMLInputElement>(null);
+  const logoInputRef = React.useRef<HTMLInputElement>(null);
+
+  // Lab Logo state (used in receipts)
+  const [logoUrl, setLogoUrl] = useState<string>('');
+
+  const [fromDate1, setFromDate1] = useState<string>("");
+  const [fromDate2, setFromDate2] = useState<string>("");
+
+  const handleLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      setLogoUrl(dataUrl);
+      toast({ title: 'Logo updated', description: 'This logo will appear on receipts.' });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSelectedDateBackup = async () => {
+    const from = fromDate1?.trim();
+    const to = fromDate2?.trim();
+    const isDate = (d?: string) => /^\d{4}-\d{2}-\d{2}$/.test(String(d || ''));
+
+    const both = isDate(from) && isDate(to);
+    const single = isDate(from) || isDate(to);
+
+    if (!both && !single) {
+      toast({ title: 'Error', description: 'Please select at least one valid date', variant: 'destructive' });
+      return;
+    }
+    try {
+      let res: Response;
+      if (both) {
+        res = await fetch(`${API_BASE}/backup/by-range`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ from, to })
+        });
+      } else {
+        const date = isDate(from) ? from! : to!;
+        res = await fetch(`${API_BASE}/backup/by-date`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ date })
+        });
+      }
+      if (!res.ok) throw new Error('Failed');
+      const data = await res.json();
+      toast({ title: 'Backup created', description: both ? `Range: ${from} to ${to}. Downloading...` : `Date: ${(isDate(from)?from:to)}. Downloading...` });
+      window.location.href = `${API_BASE}/backup/download/${data.fileName}`;
+    } catch {
+      toast({ title: 'Error', description: 'Backup failed', variant: 'destructive' });
+    }
+  };
+
+  const handleRemoveLogo = () => {
+    setLogoUrl('');
+    if (logoInputRef.current) logoInputRef.current.value = '';
+    toast({ title: 'Logo removed' });
+  };
+
+  const handleManualBackup = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/backup/manual`, { method: 'POST' });
+      if (!res.ok) throw new Error('Failed');
+      const data = await res.json();
+      toast({ title: 'Backup created', description: 'Downloading...' });
+      window.location.href = `${API_BASE}/backup/download/${data.fileName}`;
+    } catch {
+      toast({ title: 'Error', description: 'Backup failed', variant: 'destructive' });
+    }
+  };
+
+  const handleDeleteAll = async () => {
+    if (!confirm('Are you sure? This will delete ALL data and cannot be undone.')) return;
+    try {
+      const res = await fetch(`${API_BASE}/backup/purge`, { method: 'POST' });
+      if (!res.ok) throw new Error('Failed');
+      toast({ title: 'Data deleted', description: 'All database data has been removed' });
+    } catch {
+      toast({ title: 'Error', description: 'Failed to delete data', variant: 'destructive' });
+    }
+  };
+
+  const handleImportBackup: React.ChangeEventHandler<HTMLInputElement> = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const json = JSON.parse(text);
+      const res = await fetch(`${API_BASE}/backup/restore`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(json)
+      });
+      if (!res.ok) throw new Error('Failed');
+      await res.json().catch(() => ({}));
+      toast({ title: 'Data restored', description: 'Backup imported successfully' });
+      setTimeout(() => window.location.reload(), 400);
+    } catch {
+      toast({ title: 'Error', description: 'Failed to restore backup', variant: 'destructive' });
+    } finally {
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
+  const currencies = [
+    { code: "PKR", name: "Pakistani Rupee", symbol: "₨" }
+  ];
+
+  const API_BASE = "/api/lab";
+
+  // Load settings from backend on mount
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const res = await api.get('/settings');
+        const data = res.data || {};
+        const lab = data.lab || {};
+        const pricing = data.pricing || {};
+        const notifications = data.notifications || {};
+        const backup = data.backup || {};
+
+        setLabSettings({
+          ...DEFAULT_LAB_SETTINGS,
+          ...lab,
+        });
+        setPricingSettings({
+          ...DEFAULT_PRICING_SETTINGS,
+          ...pricing,
+        });
+        setNotificationSettings({
+          ...DEFAULT_NOTIFICATION_SETTINGS,
+          ...notifications,
+        });
+        setBackupSettings({
+          ...DEFAULT_BACKUP_SETTINGS,
+          ...backup,
+        });
+        if (lab.logoUrl) {
+          setLogoUrl(lab.logoUrl);
+        }
+      } catch (err) {
+        console.error('Failed to load settings', err);
+        toast({ title: 'Error', description: 'Failed to load settings from server', variant: 'destructive' });
+      }
+    };
+    load();
+  }, []);
+
+  const handleSaveAll = async () => {
+    try {
+      const payload = {
+        lab: { ...labSettings, logoUrl },
+        pricing: { ...pricingSettings },
+        notifications: { ...notificationSettings },
+        backup: { ...backupSettings },
+      };
+      const res = await api.put('/settings', payload);
+      const data = res.data || {};
+      // Optional: refresh local state from response
+      if (data.lab) setLabSettings({ ...DEFAULT_LAB_SETTINGS, ...data.lab });
+      if (data.pricing) setPricingSettings({ ...DEFAULT_PRICING_SETTINGS, ...data.pricing });
+      if (data.notifications) setNotificationSettings({ ...DEFAULT_NOTIFICATION_SETTINGS, ...data.notifications });
+      if (data.backup) setBackupSettings({ ...DEFAULT_BACKUP_SETTINGS, ...data.backup });
+      if (data.lab?.logoUrl) setLogoUrl(data.lab.logoUrl);
+
+      toast({ title: 'Settings saved', description: 'All changes saved to server.' });
+    } catch (err) {
+      console.error('Failed to save settings', err);
+      toast({ title: 'Error', description: 'Failed to save settings to server', variant: 'destructive' });
+    }
+  };
+
+  const handleSaveSettings = async () => {
+    setIsSaving(true);
+    try {
+      // Simulate API call
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      
+      const settings = {
+        lab: labSettings,
+        pricing: pricingSettings,
+        notifications: notificationSettings,
+        updatedAt: new Date()
+      };
+      
+      console.log("Settings saved:", settings);
+      
+      toast({
+        title: "Settings Saved",
+        description: "All settings have been updated successfully.",
+      });
+      
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to save settings. Please try again.",
+        variant: "destructive"
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <div className="p-6 space-y-6">
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-bold">Settings</h1>
+          <p className="text-sm text-muted-foreground">
+            Manage your laboratory settings and preferences
+          </p>
+        </div>
+      </div>
+
+      <Tabs defaultValue="lab" className="w-full">
+        <TabsList className="flex gap-4 mb-4">
+          <TabsTrigger value="backup">
+            <Save className="w-4 h-4 mr-2" />
+            Backup
+          </TabsTrigger>
+          <TabsTrigger value="lab">
+            <Building className="w-4 h-4 mr-2" />
+            Lab
+          </TabsTrigger>
+          <TabsTrigger value="pricing">
+            <DollarSign className="w-4 h-4 mr-2" />
+            Pricing
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="lab">
+          <Card>
+            <CardHeader>
+              <CardTitle>Lab Information</CardTitle>
+              <CardDescription>Update your laboratory's contact and identification details</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="labName">Laboratory Name</Label>
+                <Input
+                  id="labName"
+                  value={labSettings.labName}
+                  onChange={(e) => setLabSettings({...labSettings, labName: e.target.value})}
+                />
+              </div>
+              
+              <div className="space-y-2">
+                <Label htmlFor="address">Address</Label>
+                <textarea
+                  id="address"
+                  className="w-full p-3 border rounded-md resize-none"
+                  rows={3}
+                  value={labSettings.address}
+                  onChange={(e) => setLabSettings({...labSettings, address: e.target.value})}
+                />
+              </div>
+              
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="phone">Phone</Label>
+                  <Input
+                    id="phone"
+                    value={labSettings.phone}
+                    onChange={(e) => setLabSettings({...labSettings, phone: e.target.value})}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="email">Email</Label>
+                  <Input
+                    id="email"
+                    type="email"
+                    value={labSettings.email}
+                    onChange={(e) => setLabSettings({...labSettings, email: e.target.value})}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="license">License Number</Label>
+                  <Input
+                    id="license"
+                    value={labSettings.license}
+                    onChange={(e) => setLabSettings({ ...labSettings, license: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="website">Website</Label>
+                  <Input
+                    id="website"
+                    value={labSettings.website}
+                    onChange={(e) => setLabSettings({ ...labSettings, website: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="directorName">Director Name</Label>
+                  <Input
+                    id="directorName"
+                    value={labSettings.directorName || ''}
+                    onChange={(e) => setLabSettings({ ...labSettings, directorName: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="accreditationBody">Accreditation Body</Label>
+                  <Input
+                    id="accreditationBody"
+                    value={labSettings.accreditationBody || ''}
+                    onChange={(e) => setLabSettings({ ...labSettings, accreditationBody: e.target.value })}
+                  />
+                </div>
+              </div>
+
+
+              {/* Lab Logo upload */}
+              <div className="space-y-2">
+                <Label htmlFor="labLogo">Lab Logo (for receipts)</Label>
+                <div className="flex items-start gap-4 flex-wrap">
+                  <input
+                    id="labLogo"
+                    ref={logoInputRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={handleLogoChange}
+                    className="block w-full max-w-sm text-sm text-gray-900 border border-gray-300 rounded-lg cursor-pointer bg-gray-50"
+                  />
+                  {logoUrl && (
+                    <div className="flex items-center gap-3">
+                      <img src={logoUrl} alt="Lab Logo Preview" className="h-16 w-16 object-contain border rounded" />
+                      <Button variant="destructive" type="button" onClick={handleRemoveLogo}>Remove</Button>
+                    </div>
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground">PNG or JPG recommended. This image is stored locally and used on printed receipts/reports.</p>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="pricing">
+          <Card>
+            <CardHeader>
+              <CardTitle>Pricing Configuration</CardTitle>
+              <CardDescription>Currency and pricing settings</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="defaultCurrency">Default Currency</Label>
+                <select
+                  id="defaultCurrency"
+                  className="w-full p-2 border border-gray-300 rounded-md"
+                  value={pricingSettings.defaultCurrency}
+                  onChange={(e) => setPricingSettings({...pricingSettings, defaultCurrency: e.target.value})}
+                >
+                  {currencies.map((currency) => (
+                    <option key={currency.code} value={currency.code}>
+                      {currency.symbol} {currency.name} ({currency.code})
+                    </option>
+                  ))}
+                </select>
+                <Badge className="bg-green-100 text-green-800">
+                  Recommended: PKR for Pakistan
+                </Badge>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="taxRate">Tax Rate (%)</Label>
+                  <Input
+                    id="taxRate"
+                    type="number"
+                    value={pricingSettings.taxRate}
+                    onChange={(e) => setPricingSettings({...pricingSettings, taxRate: parseFloat(e.target.value) || 0})}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="bulkDiscountRate">Discount (%)</Label>
+                  <Input
+                    id="bulkDiscountRate"
+                    type="number"
+                    value={pricingSettings.bulkDiscountRate}
+                    onChange={(e) => setPricingSettings({...pricingSettings, bulkDiscountRate: parseFloat(e.target.value) || 0})}
+                  />
+                </div>
+              </div>
+              
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Backup Tab */}
+        <TabsContent value="backup">
+          <Card>
+            <CardHeader>
+              <CardTitle>Backup Settings</CardTitle>
+              <CardDescription>Configure and run backups</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-xl">
+                <div className="space-y-2">
+                  <Label htmlFor="fromDate1">From</Label>
+                  <input
+                    id="fromDate1"
+                    type="date"
+                    className="w-full p-2 border border-gray-300 rounded-md"
+                    value={fromDate1}
+                    onChange={(e)=>setFromDate1(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="fromDate2">From</Label>
+                  <input
+                    id="fromDate2"
+                    type="date"
+                    className="w-full p-2 border border-gray-300 rounded-md"
+                    value={fromDate2}
+                    onChange={(e)=>setFromDate2(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-4 flex-wrap">
+                <Button variant="secondary" onClick={handleSelectedDateBackup}>Selected Date Backup</Button>
+                <Button onClick={handleManualBackup}>Run Manual Backup</Button>
+                <Button variant="destructive" onClick={handleDeleteAll}>Delete All Data</Button>
+                <Button variant="secondary" onClick={() => fileRef.current?.click()}>Import Backup</Button>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="application/json"
+                  className="hidden"
+                  onChange={handleImportBackup}
+                />
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+      </Tabs>
+
+      {/* Save Button */}
+      <div className="flex justify-end">
+        <Button className="gap-2" onClick={handleSaveAll}>
+          <Save className="w-4 h-4" />
+          Save All Changes
+        </Button>
+      </div>
+    </div>
+  );
+};
+
+export default Settings;

@@ -76,6 +76,49 @@ async function createSample(req, res) {
       status,
     });
 
+    // --- User Profiling upsert ---
+    try {
+      const UserProfiling = require('../models/UserProfiling');
+      const keyQuery = {};
+      if (body.cnic) keyQuery.cnic = String(body.cnic).trim();
+      if (!keyQuery.cnic && body.phone) keyQuery.phone = String(body.phone).trim();
+
+      if (Object.keys(keyQuery).length > 0) {
+        const testsNames = tests.map((t) => t?.name).filter(Boolean);
+        const visit = {
+          date: new Date(),
+          tests: testsNames,
+          sample: sample._id,
+          sampleNumber: sample.sampleNumber,
+          status,
+        };
+
+        const update = {
+          $setOnInsert: {
+            cnic: keyQuery.cnic || undefined,
+            phone: keyQuery.phone || undefined,
+          },
+          $set: {
+            name: body.patientName,
+            gender: body.gender,
+            age: body.age,
+            address: body.address,
+            lastVisited: new Date(),
+          },
+          $inc: { visitCount: 1 },
+          $push: { visits: visit },
+        };
+
+        await UserProfiling.findOneAndUpdate(keyQuery, update, {
+          new: true,
+          upsert: true,
+        });
+      }
+    } catch (e) {
+      console.error('UserProfiling upsert failed:', e);
+      // Do not fail the sample creation on profiling error
+    }
+
     return res.status(201).json(sample);
   } catch (err) {
     if (err && err.code === 11000 && err.keyPattern && err.keyPattern.sampleNumber) {

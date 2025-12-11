@@ -99,6 +99,7 @@ const Navigation: React.FC<NavigationProps> = ({
     const allItems: MenuItem[] = [
       { id: "dashboard" as CurrentView, label: "Dashboard", icon: LayoutDashboard },
       { id: "appointments" as CurrentView, label: "Appointments", icon: CalendarDays },
+      { id: "profiling" as CurrentView, label: "Profiling", icon: Activity },
       { id: "test-catalog" as CurrentView, label: "Test Catalog", icon: TestTube2 },
       { id: "samples" as CurrentView, label: "Samples", icon: Beaker },
       { id: "barcodes" as CurrentView, label: "Barcodes", icon: QrCode },

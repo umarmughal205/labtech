@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { MonthYearPicker } from "@/components/lab compoenents/ui/month-year-picker";
 import type { UIStaff, AttendanceRecord } from "@/lab utils/staffService";
-import { getMonthlyAttendance, getAttendanceSettings } from "@/lab utils/staffService";
+import { getMonthlyAttendance, getAttendanceSettings, getMonthlySummary } from "@/lab utils/staffService";
 
 interface StaffReportProps {
   isUrdu: boolean;
@@ -24,6 +24,7 @@ const StaffReport: React.FC<StaffReportProps> = ({ isUrdu, staffList, attendance
   const [month, setMonth] = useState<string>(() => initialMonth || new Date().toISOString().slice(0, 7)); // YYYY-MM
   const [monthlyRows, setMonthlyRows] = useState<AttendanceRecord[]>([]);
   const [settings, setSettings] = useState<any>({ lateDeduction: 0, leaveDeduction: 0, earlyOutDeduction: 0 });
+  const [summary, setSummary] = useState<any | null>(null);
 
   useEffect(() => {
     // prioritize initialStaffId when provided
@@ -59,6 +60,9 @@ const StaffReport: React.FC<StaffReportProps> = ({ isUrdu, staffList, attendance
     getMonthlyAttendance(selectedStaffId, month)
       .then((rows) => setMonthlyRows(rows))
       .catch(() => setMonthlyRows([]));
+    getMonthlySummary(selectedStaffId, month)
+      .then((s) => setSummary(s))
+      .catch(() => setSummary(null));
   }, [selectedStaffId, month]);
 
   // Fallback rows if backend empty: use embedded or provided
@@ -151,20 +155,44 @@ const StaffReport: React.FC<StaffReportProps> = ({ isUrdu, staffList, attendance
   }, [month]);
 
   const stats = useMemo(() => {
+    // Prefer backend counts from summary; fallback to UI-derived
+    if (summary) {
+      const present = Number(summary.present || 0);
+      const late = Number(summary.late || 0);
+      const leave = Number(summary.absent || 0);
+      return { present, late, leave };
+    }
     const lower = (s: any) => String(s || "").toLowerCase();
     const present = rows.filter((r: any) => lower(r.status) === "present").length;
     const leave = rows.filter((r: any) => lower(r.status) === "leave").length;
     const late = rows.filter((r: any) => lower(r.status) === "late").length;
     return { present, leave, late };
-  }, [rows]);
+  }, [rows, summary]);
 
   const basicSalary = Number(selected?.salary || 0);
-  const perLate = Number(settings?.lateDeduction || 0);
-  const perLeave = Number(settings?.leaveDeduction || 0);
-  const lateDeduction = perLate * stats.late;
-  const leaveDeduction = perLeave * stats.leave;
-  const totalDeductions = lateDeduction + leaveDeduction;
-  const netSalary = Math.max(0, basicSalary - totalDeductions);
+  // Compute breakdown from backend per-day applied amounts when available
+  const { lateDeduction, leaveDeduction, totalDeductions, netSalary } = useMemo(() => {
+    let lateSum = 0, leaveSum = 0, total = 0, net = 0;
+    if (summary && summary.days) {
+      for (const d of Object.keys(summary.days)) {
+        const day = summary.days[d] || {};
+        lateSum += Number(day.appliedLateDeduction || 0);
+        leaveSum += Number(day.appliedAbsentDeduction || 0);
+      }
+      total = Number(summary.totalDeduction || (lateSum + leaveSum + 0));
+      const reward = Number(summary.totalReward || 0);
+      net = Math.max(0, basicSalary - total + reward);
+      return { lateDeduction: lateSum, leaveDeduction: leaveSum, totalDeductions: total, netSalary: net };
+    }
+    // Fallback to settings * counts if summary not available
+    const perLate = Number(settings?.lateDeduction || 0);
+    const perLeave = Number(settings?.leaveDeduction || settings?.absentDeduction || 0);
+    lateSum = perLate * Number(stats.late || 0);
+    leaveSum = perLeave * Number(stats.leave || 0);
+    total = lateSum + leaveSum;
+    net = Math.max(0, basicSalary - total);
+    return { lateDeduction: lateSum, leaveDeduction: leaveSum, totalDeductions: total, netSalary: net };
+  }, [summary, stats, settings, basicSalary]);
 
   return (
     <Dialog open onOpenChange={onClose}>

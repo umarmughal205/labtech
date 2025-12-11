@@ -81,10 +81,21 @@ type TranslationKeys = {
 };
 
 const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
-  const formatTime = (iso?: string) => {
-    if (!iso) return '--:--';
-    const d = new Date(iso);
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const formatTime = (val?: string) => {
+    if (!val) return '--:--';
+    // handle already-formatted time like HH:mm or HH:mm AM/PM
+    if (/^\d{2}:\d{2}(\s?(AM|PM))?$/i.test(val)) return val;
+    if (/^\d{4}-\d{2}-\d{2}T/.test(val) || /Z$/.test(val)) {
+      const d = new Date(val);
+      return isNaN(d as any) ? String(val) : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+    // fallback
+    try {
+      const d = new Date(val);
+      return isNaN(d as any) ? String(val) : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch {
+      return String(val);
+    }
   };
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -119,6 +130,7 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
   const [selectedEmployeeId,setSelectedEmployeeId]=useState('');
   const [attendanceDefaults,setAttendanceDefaults]=useState<{staffId?:string;date?:string}>({});
   const [lastRefreshed,setLastRefreshed]=useState('');
+  const [dailyDate, setDailyDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
 
   // Helper to safely display a time string whether ISO or already HH:MM
   const displayTime = (val?: string) => {
@@ -128,6 +140,34 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
     // Otherwise assume already user-friendly time
     return val;
   };
+
+  // Compute hours between two times (supports 'HH:mm' or ISO)
+  const computeHours = (start?: string, end?: string) => {
+    if (!start || !end) return '';
+    const toMinutes = (v: string) => {
+      // HH:mm format
+      if (/^\d{2}:\d{2}$/.test(v)) {
+        const [h, m] = v.split(':').map(Number);
+        return h * 60 + m;
+      }
+      // ISO
+      const d = new Date(v);
+      if (isNaN(d as any)) return NaN as any;
+      return d.getHours() * 60 + d.getMinutes();
+    };
+    const a = toMinutes(start);
+    const b = toMinutes(end);
+    if (!isFinite(a) || !isFinite(b) || b <= a) return '';
+    const diff = b - a;
+    const hh = Math.floor(diff / 60);
+    const mm = diff % 60;
+    return ` (${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')})`;
+  };
+
+  // Load attendance for selected daily date
+  useEffect(() => {
+    getDailyAttendance(dailyDate).then(setDailyRows).catch(() => setDailyRows([]));
+  }, [dailyDate]);
 
   // Prepare and open profile with enriched data (use already-fetched staff with embedded attendance)
   const handleViewProfile = async (staffMember: any) => {
@@ -234,8 +274,8 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
     fetchStaff()
       .then(setStaff)
       .catch(err => {
-        console.error('Failed to fetch staff list from backend, falling back to local data', err);
-        setStaff(loadInitialData().staff);
+        console.error('Failed to fetch staff list from backend', err);
+        setStaff([]); // no fallback to local; only show DB data
       });
   }, []);
 
@@ -387,6 +427,16 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
       } as any;
       if (formData.salary) payload.salary = Number(formData.salary);
       if (formData.joinDate) payload.joinDate = new Date(formData.joinDate);
+      // include per-staff deduction overrides when present
+      if (Object.prototype.hasOwnProperty.call(formData, 'lateDeduction')) {
+        payload.lateDeduction = formData.lateDeduction;
+      }
+      if (Object.prototype.hasOwnProperty.call(formData, 'earlyOutDeduction')) {
+        payload.earlyOutDeduction = formData.earlyOutDeduction;
+      }
+      if (Object.prototype.hasOwnProperty.call(formData, 'leaveDeduction')) {
+        payload.leaveDeduction = formData.leaveDeduction;
+      }
       
 
       if (editingStaff && editingStaff._id) {
@@ -411,8 +461,8 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
         ? {...s, attendance:[...(s.attendance||[]), saved]}
         : s));
 
-      // refresh daily and monthly views
-      getDailyAttendance().then(setDailyRows).catch(()=>{});
+      // refresh daily and monthly views (respect selected daily date)
+      getDailyAttendance(dailyDate).then(setDailyRows).catch(()=>{});
       if(activeTab==='monthly' && selectedEmployeeId===String(attendanceData.staffId)){
         setMonthlyRows(m=>[...m, saved]);
       }
@@ -512,8 +562,9 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
     if (activeTab === 'daily') {
       // dailyRows: { name, status, checkIn, checkOut, notes }
       rows = dailyRows.map((r:any) => {
-        const dateStr = new Date().toISOString().split('T')[0];
-        return `${r.name},${dateStr},${displayTime(r.checkIn)},${displayTime(r.checkOut)},${r.status||''}`;
+        const dateStr = dailyDate;
+        const name = r.staffName || r.name || '';
+        return `${name},${dateStr},${displayTime(r.checkIn)},${displayTime(r.checkOut)},${r.status||''}`;
       });
     } else if (activeTab === 'monthly') {
       rows = monthlyRows.map((r:any) => {
@@ -565,7 +616,7 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
       const refreshed = await fetchStaff();
       setStaff(refreshed);
     } catch (err) { console.error(err); }
-    getDailyAttendance().then(setDailyRows).catch(()=>{});
+    getDailyAttendance(dailyDate).then(setDailyRows).catch(()=>{});
     if(activeTab==='monthly' && selectedEmployeeId){
       try {
         const rows = await getMonthlyAttendance(String(selectedEmployeeId), selectedMonth);
@@ -927,10 +978,15 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
             <CardHeader>
               <CardTitle className="flex items-center space-x-2">
                 <CalendarIcon className="h-5 w-5" />
-                <span>{t.dailyView} - {new Date().toLocaleDateString()}</span>
+                <span>{t.dailyView}</span>
               </CardTitle>
             </CardHeader>
             <CardContent>
+              <div className="flex items-center gap-2 mb-4">
+                <Label className="text-sm">{t.date}</Label>
+                <Input type="date" className="w-48" value={dailyDate} onChange={(e)=>setDailyDate(e.target.value)} />
+                <Button variant="outline" size="sm" onClick={()=>getDailyAttendance(dailyDate).then(setDailyRows).catch(()=>setDailyRows([]))}>{t.filterMonth || 'Apply'}</Button>
+              </div>
               {dailyRows.length > 0 ? (
                 <Table>
                   <TableHeader>
@@ -939,6 +995,7 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
                       <TableHead>{t.status}</TableHead>
                       <TableHead>{t.time}</TableHead>
                       <TableHead>{t.notes}</TableHead>
+                      <TableHead>Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -950,8 +1007,64 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
                             {record.status}
                           </Badge>
                         </TableCell>
-                        <TableCell>{formatTime(record.checkIn)} - {formatTime(record.checkOut)}</TableCell>
-                        <TableCell>{record.notes || '-'}</TableCell>
+                        <TableCell>
+                          {formatTime(record.checkIn)} - {formatTime(record.checkOut)}
+                          {computeHours(record.checkIn, record.checkOut)}
+                        </TableCell>
+                        <TableCell>
+                          {(() => {
+                            const note = record.notes || '';
+                            if (String(record.status).toLowerCase() === 'absent' && note === 'leave') {
+                              const d = new Date(`${dailyDate}T00:00:00`);
+                              const day = isNaN(d as any) ? '' : d.toLocaleDateString(undefined, { weekday: 'short' });
+                              return `Leave${day ? ` (${day})` : ''}`;
+                            }
+                            return note || '-';
+                          })()}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={async()=>{
+                                try{
+                                  const now = new Date();
+                                  const hh = String(now.getHours()).padStart(2,'0');
+                                  const mm = String(now.getMinutes()).padStart(2,'0');
+                                  await apiAddAttendance({ staffId: String(record.staffId), date: dailyDate, status: 'present', checkIn: `${hh}:${mm}` } as any);
+                                  await getDailyAttendance(dailyDate).then(setDailyRows).catch(()=>{});
+                                  toast({ title: 'Clock-in saved' });
+                                }catch(err:any){ toast({ variant:'destructive', title:'Failed', description: err.response?.data?.message||err.message }); }
+                              }}
+                            >Clock In</Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={async()=>{
+                                try{
+                                  const now = new Date();
+                                  const hh = String(now.getHours()).padStart(2,'0');
+                                  const mm = String(now.getMinutes()).padStart(2,'0');
+                                  await apiAddAttendance({ staffId: String(record.staffId), date: dailyDate, status: 'present', checkOut: `${hh}:${mm}` } as any);
+                                  await getDailyAttendance(dailyDate).then(setDailyRows).catch(()=>{});
+                                  toast({ title: 'Clock-out saved' });
+                                }catch(err:any){ toast({ variant:'destructive', title:'Failed', description: err.response?.data?.message||err.message }); }
+                              }}
+                            >Clock Out</Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={async()=>{
+                                try{
+                                  await apiAddAttendance({ staffId: String(record.staffId), date: dailyDate, status: 'leave' } as any);
+                                  await getDailyAttendance(dailyDate).then(setDailyRows).catch(()=>{});
+                                  toast({ title: 'Leave applied' });
+                                }catch(err:any){ toast({ variant:'destructive', title:'Failed', description: err.response?.data?.message||err.message }); }
+                              }}
+                            >Apply Leave</Button>
+                          </div>
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -1013,15 +1126,21 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
                     const isCurrentMonth = today.getFullYear()===yy && (today.getMonth()+1)===mm;
                     const daysInMonth = new Date(yy, mm, 0).getDate();
                     const lastDay = isCurrentMonth ? today.getDate() : daysInMonth;
+                    const selectedStaff = staff.find(s=> String(s._id||s.id)===String(selectedEmployeeId));
+                    const joinDateStr = selectedStaff?.joinDate ? String(selectedStaff.joinDate).slice(0,10) : '';
                     const byDay: Record<string, any> = {};
                     for(const r of monthlyRows){
                       const s = String(r.date||"");
                       const match = s.match(/^(\d{4}-\d{2}-\d{2})/);
                       const key = match? match[1] : `${new Date(s).getFullYear()}-${pad(new Date(s).getMonth()+1)}-${pad(new Date(s).getDate())}`;
+                      // Skip records before staff join date
+                      if (joinDateStr && key < joinDateStr) continue;
                       byDay[key] = { ...r, date: key };
                     }
                     for(let d=1; d<=lastDay; d++){
                       const key = `${yy}-${pad(mm)}-${pad(d)}`;
+                      // Do not auto-fill for dates earlier than join date
+                      if (joinDateStr && key < joinDateStr) continue;
                       if(!byDay[key] && selectedEmployeeId){
                         byDay[key] = { staffId: selectedEmployeeId, staffName: (staff.find(s=> String(s._id||s.id)===String(selectedEmployeeId))?.name)||'', date: key, checkIn: null, checkOut: null, status: 'leave' };
                       }
@@ -1054,6 +1173,40 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
                           <div className="text-sm">
                             <Badge variant={record.status==='present'?'default': (record.status==='late'?'secondary':'outline')} className="capitalize">{record.status||'-'}</Badge>
                           </div>
+                          {selectedEmployeeId && (
+                            <div className="flex items-center gap-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={async()=>{
+                                  const v = window.prompt('Enter check-in time (HH:mm)');
+                                  if(!v) return;
+                                  try{
+                                    await apiAddAttendance({ staffId: String(selectedEmployeeId), date: record.date, status: 'present', checkIn: v } as any);
+                                    const rows = await getMonthlyAttendance(String(selectedEmployeeId), selectedMonth);
+                                    setMonthlyRows(rows);
+                                    if (dailyDate === record.date) getDailyAttendance(dailyDate).then(setDailyRows).catch(()=>{});
+                                    toast({title:'Check-in set'});
+                                  }catch(err:any){ toast({variant:'destructive', title:'Failed', description: err.response?.data?.message||err.message}); }
+                                }}
+                              >Set In</Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={async()=>{
+                                  const v = window.prompt('Enter check-out time (HH:mm)');
+                                  if(!v) return;
+                                  try{
+                                    await apiAddAttendance({ staffId: String(selectedEmployeeId), date: record.date, status: 'present', checkOut: v } as any);
+                                    const rows = await getMonthlyAttendance(String(selectedEmployeeId), selectedMonth);
+                                    setMonthlyRows(rows);
+                                    if (dailyDate === record.date) getDailyAttendance(dailyDate).then(setDailyRows).catch(()=>{});
+                                    toast({title:'Check-out set'});
+                                  }catch(err:any){ toast({variant:'destructive', title:'Failed', description: err.response?.data?.message||err.message}); }
+                                }}
+                              >Set Out</Button>
+                            </div>
+                          )}
                         </div>
                       </div>
                     ));
@@ -1117,7 +1270,9 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
                           return { ...s, attendance: [...filtered, updated] };
                         }));
                         toast({ title: 'Clocked in', description: `${staffMember.name} clocked in at ${updated.checkIn}` });
-                        if(activeTab==='monthly' && selectedEmployeeId){
+                        // refresh views
+                        getDailyAttendance().then(setDailyRows).catch(()=>{});
+                        if(selectedEmployeeId){
                           try{ const rows = await getMonthlyAttendance(String(selectedEmployeeId), selectedMonth); setMonthlyRows(rows);}catch{ setMonthlyRows([]);} }
                       } catch (err:any) {
                         toast({ variant:'destructive', title:'Clock in failed', description: err.response?.data?.message||err.message });
@@ -1140,7 +1295,10 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
                           return { ...s, attendance: [...filtered, updated] };
                         }));
                         toast({ title: 'Clocked out', description: `${staffMember.name} clocked out at ${updated.checkOut}` });
+                        // refresh views
                         getDailyAttendance().then(setDailyRows).catch(()=>{});
+                        if(selectedEmployeeId){
+                          try{ const rows = await getMonthlyAttendance(String(selectedEmployeeId), selectedMonth); setMonthlyRows(rows);}catch{ setMonthlyRows([]);} }
                       } catch (err:any) {
                         toast({ variant:'destructive', title:'Clock out failed', description: err.response?.data?.message||err.message });
                         // re-enable on failure

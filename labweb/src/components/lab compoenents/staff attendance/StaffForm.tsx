@@ -21,6 +21,15 @@ const StaffForm: React.FC<StaffFormProps> = ({ isUrdu, onClose, onSave, staff })
   const [salary, setSalary] = useState(staff?.salary?.toString() || "");
   const [joinDate, setJoinDate] = useState(staff?.joinDate ? staff.joinDate.substring(0,10) : "");
   const [status, setStatus] = useState<"active" | "inactive">(staff?.status || "active");
+  const [lateDeduction, setLateDeduction] = useState<string>(
+    staff?.lateDeduction != null ? String(staff.lateDeduction) : ""
+  );
+  const [earlyOutDeduction, setEarlyOutDeduction] = useState<string>(
+    staff?.earlyOutDeduction != null ? String(staff.earlyOutDeduction) : ""
+  );
+  const [leaveDeduction, setLeaveDeduction] = useState<string>(
+    staff?.leaveDeduction != null ? String(staff.leaveDeduction) : ""
+  );
 
   const handleSubmit = () => {
     onSave({
@@ -33,6 +42,9 @@ const StaffForm: React.FC<StaffFormProps> = ({ isUrdu, onClose, onSave, staff })
       salary: salary ? Number(salary) : undefined,
       joinDate: joinDate ? new Date(joinDate).toISOString() : undefined,
       status,
+      lateDeduction: lateDeduction === "" ? null : Number(lateDeduction),
+      earlyOutDeduction: earlyOutDeduction === "" ? null : Number(earlyOutDeduction),
+      leaveDeduction: leaveDeduction === "" ? null : Number(leaveDeduction),
     });
     onClose();
   };
@@ -59,6 +71,30 @@ const StaffForm: React.FC<StaffFormProps> = ({ isUrdu, onClose, onSave, staff })
 
             <label className="block text-sm font-medium">{t("Salary", "تنخواہ")}</label>
             <Input type="number" value={salary} onChange={(e) => setSalary(e.target.value)} />
+
+            <label className="block text-sm font-medium">{t("Late Deduction (Rs)", "لیٹ کٹوتی (روپے)")}</label>
+            <Input
+              type="number"
+              value={lateDeduction}
+              onChange={(e) => setLateDeduction(e.target.value)}
+              placeholder={t("Optional - overrides global", "اختیاری - گلوبل اووررائڈ")}
+            />
+
+            <label className="block text-sm font-medium">{t("Early Out Deduction (Rs)", "جلدی رخصت کٹوتی (روپے)")}</label>
+            <Input
+              type="number"
+              value={earlyOutDeduction}
+              onChange={(e) => setEarlyOutDeduction(e.target.value)}
+              placeholder={t("Optional - overrides global", "اختیاری - گلوبل اووررائڈ")}
+            />
+
+            <label className="block text-sm font-medium">{t("Leave/Absent Deduction (Rs)", "چھٹی/غیرحاضری کٹوتی (روپے)")}</label>
+            <Input
+              type="number"
+              value={leaveDeduction}
+              onChange={(e) => setLeaveDeduction(e.target.value)}
+              placeholder={t("Optional - overrides global", "اختیاری - گلوبل اووررائڈ")}
+            />
           </div>
 
           {/* Right column */}

@@ -16,6 +16,7 @@ const profilingRoutes = require('./src/routes/profilingRoutes');
 const staffRoutes = require('./src/routes/staffRoutes');
 const attendanceRoutes = require('./src/routes/attendanceRoutes');
 const expenseRoutes = require('./src/routes/expenseRoutes');
+const supplierRoutes = require('./src/routes/supplierRoutes');
 
 const app = express();
 
@@ -39,5 +40,6 @@ app.use('/api/profiling', profilingRoutes);
 app.use('/api/staff', staffRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/expenses', expenseRoutes);
+app.use('/api/lab/suppliers', supplierRoutes);
 
 app.listen(PORT, () => console.log(`API running on port ${PORT}`));

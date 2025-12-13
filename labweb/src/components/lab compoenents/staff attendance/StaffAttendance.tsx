@@ -1012,6 +1012,7 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
                           {computeHours(record.checkIn, record.checkOut)}
                         </TableCell>
                         <TableCell>
+                          //kk
                           {(() => {
                             const note = record.notes || '';
                             if (String(record.status).toLowerCase() === 'absent' && note === 'leave') {

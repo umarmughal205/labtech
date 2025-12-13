@@ -9,6 +9,7 @@ import LoginForm from "@/components/lab compoenents/auth/LoginForm";
 import SignupForm from "@/components/lab compoenents/auth/SignupForm";
 import Navigation from "@/components/lab compoenents/Navigation";
 import LabTechnicianDashboard from "@/components/lab compoenents/dashboards/LabTechnicianDashboard";
+import ProfilingPage from "@/components/lab compoenents/profiling/ProfilingPage";
 import TestCatalog from "@/components/lab compoenents/sample-management/TestCatalog";
 import SampleIntake from "@/components/lab compoenents/sample-management/SampleIntake";
 import UserManagement from "@/components/lab compoenents/admin/UserManagement";
@@ -52,6 +53,7 @@ export type CurrentView =
   | "appointments-history"
   | "user-management"
   | "samples"
+  | "profiling"
   | "barcodes"
   
 
@@ -128,6 +130,7 @@ const Index = () => {
     if (currentView === "staff-attendance") return <StaffAttendance isUrdu={false} />;
     if (currentView === "user-management") return <UserManagement />;
     if (currentView === "samples") return <SamplesPage />;
+    if (currentView === "profiling") return <ProfilingPage />;
     if (currentView === "barcodes") return <Barcodes />;
     if (currentView === "report-designer") return <ReportDesigner />;
 

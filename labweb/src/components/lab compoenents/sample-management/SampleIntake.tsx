@@ -719,6 +719,35 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
 
   // refs for Enter navigation
   const phoneRef = useRef<HTMLInputElement>(null);
+  const cnicRef = useRef<HTMLInputElement>(null);
+
+  const lookupProfiling = async (opts: { cnic?: string; phone?: string }) => {
+    try {
+      const params = new URLSearchParams();
+      if (opts.cnic) params.append("cnic", opts.cnic);
+      if (opts.phone) params.append("phone", opts.phone);
+      if (!params.toString()) return;
+
+      const token = localStorage.getItem("token");
+      const res = await api.get(`/lab/profiling/lookup?${params.toString()}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      });
+      const item = (res.data && res.data.item) || null;
+      if (!item) return;
+
+      setPatientInfo((prev) => ({
+        ...prev,
+        name: item.name || prev.name,
+        phone: item.phone || prev.phone,
+        cnic: item.cnic || prev.cnic,
+      }));
+    } catch (err: any) {
+      // 404 is fine (no profiling yet); only log other errors
+      if (err?.response?.status && err.response.status !== 404) {
+        console.error("Profiling lookup failed", err.response || err);
+      }
+    }
+  };
 
   useEffect(() => {
     try {
@@ -994,6 +1023,12 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
                 ref={phoneRef}
                 value={patientInfo.phone}
                 onChange={(e) => setPatientInfo({ ...patientInfo, phone: e.target.value })}
+                onBlur={() => {
+                  const phone = (patientInfo.phone || "").trim();
+                  if (phone.length >= 7) {
+                    lookupProfiling({ phone });
+                  }
+                }}
                 className="h-10"
                 required
               />
@@ -1033,6 +1068,7 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
             <div>
               <Label>CNIC</Label>
               <Input
+                ref={cnicRef}
                 value={patientInfo.cnic}
                 onChange={(e) => {
                   // Keep only digits, max 13
@@ -1040,6 +1076,12 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
                   setPatientInfo({ ...patientInfo, cnic: digits });
                   if (digits && digits.length !== 13) setCnicError("CNIC must be exactly 13 digits (no dashes)");
                   else setCnicError("");
+                }}
+                onBlur={() => {
+                  const cnic = (patientInfo.cnic || "").trim();
+                  if (cnic.length === 13) {
+                    lookupProfiling({ cnic });
+                  }
                 }}
                 inputMode="numeric"
                 pattern="[0-9]*"

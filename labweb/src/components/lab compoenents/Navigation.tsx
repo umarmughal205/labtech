@@ -33,7 +33,8 @@ import {
   Truck,
   Microscope,
   LayoutDashboard,
-  History
+  History,
+  Users
 } from "lucide-react";
 
 interface MenuItem {
@@ -101,6 +102,7 @@ const Navigation: React.FC<NavigationProps> = ({
       { id: "appointments" as CurrentView, label: "Appointments", icon: CalendarDays },
       { id: "test-catalog" as CurrentView, label: "Test Catalog", icon: TestTube2 },
       { id: "samples" as CurrentView, label: "Samples", icon: Beaker },
+      { id: "profiling" as CurrentView, label: "Profiling", icon: Users },
       { id: "barcodes" as CurrentView, label: "Barcodes", icon: QrCode },
       { id: "result-entry" as CurrentView, label: "Result Entry", icon: Microscope },
       { id: "reports", label: "Reports", icon: FileText },

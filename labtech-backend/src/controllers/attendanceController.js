@@ -1,6 +1,7 @@
 const Attendance = require('../models/Attendance');
 const Staff = require('../models/Staff');
 const AttendanceSettings = require('../models/AttendanceSettings');
+const MonthlyAttendance = require('../models/MonthlyAttendance');
 
 function toYMD(date) {
   const d = new Date(date);
@@ -8,6 +9,71 @@ function toYMD(date) {
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
+}
+
+function toMonthKey(date) {
+  const d = new Date(date);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  return `${y}-${m}`;
+}
+
+// Recompute and persist a staff member's MonthlyAttendance snapshot for the month that contains `date`
+async function recomputeMonthlyFor(staffId, date) {
+  const dt = new Date(date);
+  const y = dt.getFullYear();
+  const m = dt.getMonth();
+  const start = new Date(y, m, 1);
+  const end = new Date(y, m + 1, 1);
+  const monthKey = toMonthKey(dt);
+
+  const marks = await Attendance.find({ staff: staffId, date: { $gte: start, $lt: end } }).lean();
+  // Aggregate counts and applied totals
+  let present = 0, late = 0, absent = 0, earlyLeave = 0;
+  let totalLate = 0, totalEarly = 0, totalAbsent = 0, totalReward = 0;
+  const days = {};
+  for (const mdoc of marks) {
+    const dayKey = toYMD(mdoc.date);
+    if (mdoc.status === 'present') present++; else if (mdoc.status === 'late') late++; else if (mdoc.status === 'absent') absent++;
+    if ((mdoc.appliedEarlyOutDeduction || 0) > 0) earlyLeave++;
+    totalLate += Number(mdoc.appliedLateDeduction || 0);
+    totalEarly += Number(mdoc.appliedEarlyOutDeduction || 0);
+    totalAbsent += Number(mdoc.appliedAbsentDeduction || 0);
+    totalReward += Number(mdoc.appliedPresentReward || 0);
+    days[dayKey] = {
+      status: mdoc.status,
+      timeIn: mdoc.timeIn || '',
+      timeOut: mdoc.timeOut || '',
+      appliedLateDeduction: Number(mdoc.appliedLateDeduction || 0),
+      appliedEarlyOutDeduction: Number(mdoc.appliedEarlyOutDeduction || 0),
+      appliedAbsentDeduction: Number(mdoc.appliedAbsentDeduction || 0),
+      appliedPresentReward: Number(mdoc.appliedPresentReward || 0),
+      totalDelta: Number(mdoc.totalDelta || 0),
+    };
+  }
+  const totalDeduction = totalLate + totalEarly + totalAbsent;
+  const netDelta = totalReward - totalDeduction;
+
+  await MonthlyAttendance.findOneAndUpdate(
+    { staff: staffId, month: monthKey },
+    {
+      $set: {
+        present,
+        late,
+        absent,
+        earlyLeave,
+        totalLateDeduction: totalLate,
+        totalEarlyOutDeduction: totalEarly,
+        totalAbsentDeduction: totalAbsent,
+        totalPresentReward: totalReward,
+        totalDeduction,
+        totalReward,
+        netDelta,
+        days,
+      },
+    },
+    { upsert: true, new: true }
+  );
 }
 
 // POST /api/attendance/mark
@@ -97,6 +163,9 @@ async function markAttendance(req, res) {
       },
       { new: true, upsert: true }
     );
+
+    // Recompute and persist the monthly summary snapshot for this staff/month
+    await recomputeMonthlyFor(staffId, key);
 
     const logEntry = {
       staff: staffId,

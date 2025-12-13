@@ -302,11 +302,11 @@ const StaffReport: React.FC<StaffReportProps> = ({ isUrdu, staffList, attendance
                     <div className="text-xs text-gray-600">{t("Leaves", "چھٹیاں")}</div>
                   </div>
                   <div className="rounded-md bg-yellow-50 p-3 text-center">
-                    <div className="text-2xl font-bold text-yellow-700">{stats.late}</div>
+                    <div className="text-2xl font-bold text-yellow-700">{(lateCountUsed ?? stats.late) as any}</div>
                     <div className="text-xs text-gray-600">{t("Late Arrivals", "دیر سے آمد")}</div>
                   </div>
                   <div className="rounded-md bg-orange-50 p-3 text-center">
-                    <div className="text-2xl font-bold text-orange-700">{(stats as any).earlyOut || 0}</div>
+                    <div className="text-2xl font-bold text-orange-700">{(earlyOutCountUsed ?? ((stats as any).earlyOut || 0)) as any}</div>
                     <div className="text-xs text-gray-600">{t("Early Outs", "جلدی رخصت")}</div>
                   </div>
                   <div className="rounded-md bg-blue-50 p-3 text-center">

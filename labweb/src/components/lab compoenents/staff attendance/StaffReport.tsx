@@ -23,7 +23,7 @@ const StaffReport: React.FC<StaffReportProps> = ({ isUrdu, staffList, attendance
   const [search, setSearch] = useState("");
   const [month, setMonth] = useState<string>(() => initialMonth || new Date().toISOString().slice(0, 7)); // YYYY-MM
   const [monthlyRows, setMonthlyRows] = useState<AttendanceRecord[]>([]);
-  const [settings, setSettings] = useState<any>({ lateDeduction: 0, leaveDeduction: 0, earlyOutDeduction: 0 });
+  const [settings, setSettings] = useState<any>({ lateDeduction: 0, leaveDeduction: 0, earlyOutDeduction: 0, clockInTime: '', clockOutTime: '' });
   const [summary, setSummary] = useState<any | null>(null);
 
   useEffect(() => {
@@ -39,9 +39,21 @@ const StaffReport: React.FC<StaffReportProps> = ({ isUrdu, staffList, attendance
   }, [staffList, selectedStaffId, initialStaffId]);
 
   useEffect(() => {
-    getAttendanceSettings().then((s) => {
-      if (s && s.value) setSettings(s.value);
-    }).catch(() => {});
+    getAttendanceSettings()
+      .then((s) => {
+        if (!s) return;
+        const v = (s && (s as any).value) ? (s as any).value : s;
+        // Normalize possible backend keys to UI keys
+        const normalized = {
+          lateDeduction: Number((v as any).lateDeduction ?? 0),
+          earlyOutDeduction: Number((v as any).earlyOutDeduction ?? (v as any).earlyLeaveDeduction ?? 0),
+          leaveDeduction: Number((v as any).leaveDeduction ?? (v as any).absentDeduction ?? 0),
+          clockInTime: String((v as any).clockInTime ?? (v as any).lateThreshold ?? ''),
+          clockOutTime: String((v as any).clockOutTime ?? (v as any).earlyLeaveThreshold ?? ''),
+        };
+        setSettings(normalized);
+      })
+      .catch(() => {});
   }, []);
 
   const filteredStaff = useMemo(
@@ -155,43 +167,69 @@ const StaffReport: React.FC<StaffReportProps> = ({ isUrdu, staffList, attendance
   }, [month]);
 
   const stats = useMemo(() => {
-    // Prefer backend counts from summary; fallback to UI-derived
-    if (summary) {
-      const present = Number(summary.present || 0);
-      const late = Number(summary.late || 0);
-      const leave = Number(summary.absent || 0);
-      return { present, late, leave };
-    }
+    // Always derive top-card counts from row statuses so they reflect explicit daily statuses,
+    // while salary section can still use applied amounts from summary.
     const lower = (s: any) => String(s || "").toLowerCase();
-    const present = rows.filter((r: any) => lower(r.status) === "present").length;
+    const presentRows = rows.filter((r: any) => lower(r.status) === "present");
+    const present = presentRows.length;
     const leave = rows.filter((r: any) => lower(r.status) === "leave").length;
     const late = rows.filter((r: any) => lower(r.status) === "late").length;
-    return { present, leave, late };
-  }, [rows, summary]);
+
+    // EarlyOut is not a status; derive from times and official limits
+    const toMinutes = (t: string) => {
+      const m = String(t || '').match(/^(\d{2}):(\d{2})/);
+      if (!m) return null;
+      return Number(m[1]) * 60 + Number(m[2]);
+    };
+    const outLimit = toMinutes(settings?.clockOutTime || '');
+    let earlyOut = 0;
+    for (const r of presentRows as any[]) {
+      const cout = String(r.checkOut || r.checkOutTime || '');
+      const coutM = toMinutes(cout);
+      if (outLimit != null && coutM != null && coutM < outLimit) earlyOut++;
+    }
+    return { present, leave, late, earlyOut } as const;
+  }, [rows, settings?.clockOutTime]);
 
   const basicSalary = Number(selected?.salary || 0);
   // Compute breakdown from backend per-day applied amounts when available
-  const { lateDeduction, leaveDeduction, totalDeductions, netSalary } = useMemo(() => {
-    let lateSum = 0, leaveSum = 0, total = 0, net = 0;
+  const { lateDeduction, earlyOutDeduction, leaveDeduction, totalDeductions, netSalary, lateCountUsed, earlyOutCountUsed, leaveCountUsed } = useMemo(() => {
+    let lateSum = 0, earlyOutSum = 0, leaveSum = 0, total = 0, net = 0;
+    let lateCount = 0, earlyOutCount = 0, leaveCount = 0;
+    const perLate = Number(settings?.lateDeduction || 0);
+    const perEarly = Number(settings?.earlyOutDeduction || (settings as any)?.earlyLeaveDeduction || 0);
+    const perLeave = Number(settings?.leaveDeduction || (settings as any)?.absentDeduction || 0);
+
+    // Prefer backend applied amounts when present; otherwise compute from counts and settings
     if (summary && summary.days) {
+      let hasLateApplied = false, hasEarlyApplied = false, hasLeaveApplied = false;
       for (const d of Object.keys(summary.days)) {
         const day = summary.days[d] || {};
-        lateSum += Number(day.appliedLateDeduction || 0);
-        leaveSum += Number(day.appliedAbsentDeduction || 0);
+        const l = Number(day.appliedLateDeduction);
+        const e = Number(day.appliedEarlyLeaveDeduction);
+        const a = Number(day.appliedAbsentDeduction);
+        if (!isNaN(l)) { lateSum += l; if (l>0) lateCount++; hasLateApplied = hasLateApplied || !!l; }
+        if (!isNaN(e)) { earlyOutSum += e; if (e>0) earlyOutCount++; hasEarlyApplied = hasEarlyApplied || !!e; }
+        if (!isNaN(a)) { leaveSum += a; if (a>0) leaveCount++; hasLeaveApplied = hasLeaveApplied || !!a; }
       }
-      total = Number(summary.totalDeduction || (lateSum + leaveSum + 0));
+      // If backend didn't provide a category, compute it from counts * settings
+      if (!hasLateApplied) { lateSum = perLate * Number(stats.late || 0); lateCount = Number(stats.late || 0); }
+      if (!hasEarlyApplied) { earlyOutSum = perEarly * Number((stats as any).earlyOut || 0); earlyOutCount = Number((stats as any).earlyOut || 0); }
+      if (!hasLeaveApplied) { leaveSum = perLeave * Number(stats.leave || 0); leaveCount = Number(stats.leave || 0); }
+
+      total = Number(summary.totalDeduction || (lateSum + earlyOutSum + leaveSum));
       const reward = Number(summary.totalReward || 0);
       net = Math.max(0, basicSalary - total + reward);
-      return { lateDeduction: lateSum, leaveDeduction: leaveSum, totalDeductions: total, netSalary: net };
+      return { lateDeduction: lateSum, earlyOutDeduction: earlyOutSum, leaveDeduction: leaveSum, totalDeductions: total, netSalary: net, lateCountUsed: lateCount, earlyOutCountUsed: earlyOutCount, leaveCountUsed: leaveCount };
     }
-    // Fallback to settings * counts if summary not available
-    const perLate = Number(settings?.lateDeduction || 0);
-    const perLeave = Number(settings?.leaveDeduction || settings?.absentDeduction || 0);
-    lateSum = perLate * Number(stats.late || 0);
-    leaveSum = perLeave * Number(stats.leave || 0);
-    total = lateSum + leaveSum;
+
+    // No backend summary: compute from settings * counts
+    lateCount = Number(stats.late || 0); lateSum = perLate * lateCount;
+    earlyOutCount = Number((stats as any).earlyOut || 0); earlyOutSum = perEarly * earlyOutCount;
+    leaveCount = Number(stats.leave || 0); leaveSum = perLeave * leaveCount;
+    total = lateSum + earlyOutSum + leaveSum;
     net = Math.max(0, basicSalary - total);
-    return { lateDeduction: lateSum, leaveDeduction: leaveSum, totalDeductions: total, netSalary: net };
+    return { lateDeduction: lateSum, earlyOutDeduction: earlyOutSum, leaveDeduction: leaveSum, totalDeductions: total, netSalary: net, lateCountUsed: lateCount, earlyOutCountUsed: earlyOutCount, leaveCountUsed: leaveCount };
   }, [summary, stats, settings, basicSalary]);
 
   return (
@@ -267,6 +305,10 @@ const StaffReport: React.FC<StaffReportProps> = ({ isUrdu, staffList, attendance
                     <div className="text-2xl font-bold text-yellow-700">{stats.late}</div>
                     <div className="text-xs text-gray-600">{t("Late Arrivals", "دیر سے آمد")}</div>
                   </div>
+                  <div className="rounded-md bg-orange-50 p-3 text-center">
+                    <div className="text-2xl font-bold text-orange-700">{(stats as any).earlyOut || 0}</div>
+                    <div className="text-xs text-gray-600">{t("Early Outs", "جلدی رخصت")}</div>
+                  </div>
                   <div className="rounded-md bg-blue-50 p-3 text-center">
                     <div className="text-2xl font-bold text-blue-700">{daysInMonth}</div>
                     <div className="text-xs text-gray-600">{t("Working Days", "کاروباری دن")}</div>
@@ -283,8 +325,9 @@ const StaffReport: React.FC<StaffReportProps> = ({ isUrdu, staffList, attendance
                   <div className="text-gray-600">{t("Basic Salary", "بنیادی تنخواہ")}</div>
                   <div className="text-lg font-medium">{basicSalary.toLocaleString()} PKR</div>
                   <div className="mt-3 text-gray-600">{t("Deductions", "کٹوتیاں")}:</div>
-                  <div className="text-xs text-gray-500">{t("Late Arrivals", "دیر سے آمد")} ({stats.late}): <span className="text-red-600">-{lateDeduction.toLocaleString()} PKR</span></div>
-                  <div className="text-xs text-gray-500">{t("Leaves", "چھٹیاں")} ({stats.leave}): <span className="text-red-600">-{leaveDeduction.toLocaleString()} PKR</span></div>
+                  <div className="text-xs text-gray-500">{t("Late Arrivals", "دیر سے آمد")} ({lateCountUsed ?? stats.late}): <span className="text-red-600">-{(lateDeduction||0).toLocaleString()} PKR</span></div>
+                  <div className="text-xs text-gray-500">{t("Early Outs", "جلدی رخصت")} ({earlyOutCountUsed ?? ((stats as any).earlyOut || 0)}): <span className="text-red-600">-{(earlyOutDeduction||0).toLocaleString()} PKR</span></div>
+                  <div className="text-xs text-gray-500">{t("Leaves", "چھٹیاں")} ({leaveCountUsed ?? stats.leave}): <span className="text-red-600">-{(leaveDeduction||0).toLocaleString()} PKR</span></div>
                   <div className="mt-1 font-medium">{t("Total Deductions", "کل کٹوتیاں")}: <span className="text-red-600">-{totalDeductions.toLocaleString()} PKR</span></div>
                 </div>
                 <div className="md:col-span-2 flex items-center justify-center">

@@ -26,7 +26,7 @@ import {
 import { MonthYearPicker } from '@/components/lab compoenents/ui/month-year-picker';
 import type { UIStaff } from '@/lab utils/staffService';
 import ConfirmStaffDeleteDialog from './ConfirmStaffDeleteDialog';
-import { getStaff as fetchStaff, addStaff as apiAddStaff, updateStaff as apiUpdateStaff, deleteStaff as apiDeleteStaff, clockIn as apiClockIn, clockOut as apiClockOut, getMonthlyAttendance, getAttendanceSettings, saveAttendanceSettings, addAttendance as apiAddAttendance } from '@/lab utils/staffService';
+import { getStaff as fetchStaff, addStaff as apiAddStaff, updateStaff as apiUpdateStaff, deleteStaff as apiDeleteStaff, clockIn as apiClockIn, clockOut as apiClockOut, getMonthlyAttendance, getAttendanceSettings, saveAttendanceSettings, addAttendance as apiAddAttendance, markLeave as apiMarkLeave, markAbsent as apiMarkAbsent } from '@/lab utils/staffService';
 import AttendanceForm from './AttendanceForm';
 import StaffForm from './StaffForm';
 import StaffReport from './StaffReport';
@@ -126,6 +126,8 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
   const [dailyRows, setDailyRows] = useState<any[]>([]);
   const [selectedEmployee, setSelectedEmployee] = useState<any>(null);
   const [showProfile, setShowProfile] = useState(false);
+  const [profileMonth, setProfileMonth] = useState<string>(() => new Date().toISOString().slice(0,7));
+  const [profileStaff, setProfileStaff] = useState<any>(null);
   const [monthlyRows,setMonthlyRows]=useState<any[]>([]);
   const [selectedEmployeeId,setSelectedEmployeeId]=useState('');
   const [attendanceDefaults,setAttendanceDefaults]=useState<{staffId?:string;date?:string}>({});
@@ -139,6 +141,14 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
     if (/[TzZ]/.test(val) || /\d{4}-\d{2}-\d{2}/.test(val)) return formatTime(val);
     // Otherwise assume already user-friendly time
     return val;
+  };
+
+  const isBlankOut = (cin?: string, cout?: string) => {
+    const a = String(cin || '').slice(0,5);
+    const b = String(cout || '').slice(0,5);
+    if (!b || b === '00:00') return true;
+    if (!a) return false;
+    return a === b; // treat equal in/out as not yet set
   };
 
   // Compute hours between two times (supports 'HH:mm' or ISO)
@@ -169,24 +179,62 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
     getDailyAttendance(dailyDate).then(setDailyRows).catch(() => setDailyRows([]));
   }, [dailyDate]);
 
-  // Prepare and open profile with enriched data (use already-fetched staff with embedded attendance)
-  const handleViewProfile = async (staffMember: any) => {
-    const attendance = staffMember.attendance || [];
-    const totalLeaves = attendance.filter((a: any) => (a.status || '').toLowerCase() === 'leave').length;
-    const totalDeductions = staffMember.totalDeductions ?? 0;
-    const salary = staffMember.salary ?? staffMember.baseSalary ?? 0;
-    const status = (staffMember.status || 'inactive').toLowerCase();
+  // Helper to load profile data for a given staff and month
+  const loadProfileData = async (staffMember: any, month: string) => {
+    let monthRows: any[] = [];
+    try {
+      if (staffMember?._id) {
+        monthRows = await getMonthlyAttendance(String(staffMember._id), month);
+      }
+    } catch { monthRows = []; }
+    if (!monthRows.length) {
+      const embedded = staffMember?.attendance || [];
+      monthRows = embedded.filter((a:any) => String(a.date).startsWith(month));
+    }
+
+    const toMinutes = (t:string) => {
+      const m = String(t||'').match(/^(\d{2}):(\d{2})/);
+      if (!m) return null;
+      return Number(m[1]) * 60 + Number(m[2]);
+    };
+    const inLimit = toMinutes((attendanceSettings as any)?.clockInTime || '');
+    const outLimit = toMinutes((attendanceSettings as any)?.clockOutTime || '');
+    let lateCount = 0, earlyOutCount = 0;
+    const presentRows = monthRows.filter((r:any) => String(r.status||'').toLowerCase() === 'present');
+    for (const r of presentRows) {
+      const cin = String((r as any).checkIn || (r as any).checkInTime || '');
+      const cout = String((r as any).checkOut || (r as any).checkOutTime || '');
+      const cinM = toMinutes(cin);
+      const coutM = toMinutes(cout);
+      if (inLimit != null && cinM != null && cinM > inLimit) lateCount++;
+      if (outLimit != null && coutM != null && coutM < outLimit) earlyOutCount++;
+    }
+    const leaveCount = monthRows.filter((a:any) => String(a.status||'').toLowerCase() === 'leave').length;
+    const perLate = Number((attendanceSettings as any)?.lateDeduction || 0);
+    const perEarly = Number((attendanceSettings as any)?.earlyOutDeduction || (attendanceSettings as any)?.earlyLeaveDeduction || 0);
+    const perLeave = Number((attendanceSettings as any)?.leaveDeduction || (attendanceSettings as any)?.absentDeduction || 0);
+    const totalDeductions = (perLate*lateCount) + (perEarly*earlyOutCount) + (perLeave*leaveCount);
+
+    const salary = staffMember?.salary ?? staffMember?.baseSalary ?? 0;
+    const status = (staffMember?.status || 'inactive').toLowerCase();
 
     const normalized = {
       ...staffMember,
-      attendance,
-      totalLeaves,
+      attendance: monthRows,
+      totalLeaves: leaveCount,
       totalDeductions,
       salary,
       status,
     };
-
     setSelectedEmployee(normalized);
+  };
+
+  // Prepare and open profile modal and load initial month
+  const handleViewProfile = async (staffMember: any) => {
+    const month = new Date().toISOString().slice(0,7);
+    setProfileStaff(staffMember);
+    setProfileMonth(month);
+    await loadProfileData(staffMember, month);
     setShowProfile(true);
   };
   // Attendance Settings state
@@ -1008,12 +1056,22 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
                           </Badge>
                         </TableCell>
                         <TableCell>
-                          {formatTime(record.checkIn)} - {formatTime(record.checkOut)}
-                          {computeHours(record.checkIn, record.checkOut)}
+                          {(() => {
+                            const st = String(record.status || '').toLowerCase();
+                            if (st !== 'present') return '-';
+                            const coutBlank = isBlankOut(record.checkIn, record.checkOut);
+                            const range = `${formatTime(record.checkIn)} - ${coutBlank ? '-' : formatTime(record.checkOut)}`;
+                            const hrs = coutBlank ? '' : computeHours(record.checkIn, record.checkOut);
+                            return (
+                              <span>
+                                {range}
+                                {hrs}
+                              </span>
+                            );
+                          })()}
                         </TableCell>
                         <TableCell>
-                    
-  
+                
                           {(() => {
                             const note = record.notes || '';
                             if (String(record.status).toLowerCase() === 'absent' && note === 'leave') {
@@ -1025,7 +1083,7 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
                           })()}
                         </TableCell>
                         <TableCell>
-                          <div className="flex gap-2">
+                          <div className="flex gap-2 flex-wrap">
                             <Button
                               variant="outline"
                               size="sm"
@@ -1034,6 +1092,12 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
                                   const now = new Date();
                                   const hh = String(now.getHours()).padStart(2,'0');
                                   const mm = String(now.getMinutes()).padStart(2,'0');
+                                  // Optimistic UI update for immediate feedback
+                                  setDailyRows(prev => prev.map(r => (
+                                    String(r.staffId)===String(record.staffId)
+                                      ? { ...r, status: 'present', checkIn: `${hh}:${mm}` }
+                                      : r
+                                  )));
                                   await apiAddAttendance({ staffId: String(record.staffId), date: dailyDate, status: 'present', checkIn: `${hh}:${mm}` } as any);
                                   await getDailyAttendance(dailyDate).then(setDailyRows).catch(()=>{});
                                   toast({ title: 'Clock-in saved' });
@@ -1048,6 +1112,12 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
                                   const now = new Date();
                                   const hh = String(now.getHours()).padStart(2,'0');
                                   const mm = String(now.getMinutes()).padStart(2,'0');
+                                  // Optimistic UI update for immediate feedback
+                                  setDailyRows(prev => prev.map(r => (
+                                    String(r.staffId)===String(record.staffId)
+                                      ? { ...r, status: 'present', checkOut: `${hh}:${mm}` }
+                                      : r
+                                  )));
                                   await apiAddAttendance({ staffId: String(record.staffId), date: dailyDate, status: 'present', checkOut: `${hh}:${mm}` } as any);
                                   await getDailyAttendance(dailyDate).then(setDailyRows).catch(()=>{});
                                   toast({ title: 'Clock-out saved' });
@@ -1163,13 +1233,13 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
                           <div className="flex flex-col space-y-2">
                             <div className="text-sm text-center">
                               <div className="text-gray-500 text-xs mb-1">{t.checkIn}</div>
-                              <div className="font-medium">{formatTime(record.checkIn)}</div>
+                              <div className="font-medium">{String(record.status||'').toLowerCase()==='present' ? formatTime(record.checkIn) : '-'}</div>
                             </div>
                           </div>
                           <div className="flex flex-col space-y-2">
                             <div className="text-sm text-center">
                               <div className="text-gray-500 text-xs mb-1">{t.checkOut}</div>
-                              <div className="font-medium">{formatTime(record.checkOut)}</div>
+                              <div className="font-medium">{String(record.status||'').toLowerCase()==='present' ? (isBlankOut(record.checkIn, record.checkOut) ? '-' : formatTime(record.checkOut)) : '-'}</div>
                             </div>
                           </div>
                           <div className="text-sm">
@@ -1573,13 +1643,58 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
 
       {showProfile && selectedEmployee && (
         <Dialog open={showProfile} onOpenChange={setShowProfile}>
-          <DialogContent>
+          <DialogContent className="w-[calc(100vw-2rem)] max-w-xl sm:max-w-2xl md:max-w-3xl lg:max-w-4xl overflow-y-auto max-h-[calc(100vh-20vh)]">
             <DialogHeader>
               <DialogTitle>{selectedEmployee.name}'s Profile</DialogTitle>
             </DialogHeader>
             
-            <div className="grid gap-4 py-4">
-              <div className="grid grid-cols-2 gap-4">
+            <div className="grid gap-4 py-3 sm:py-4">
+              {/* Month selector and quick actions */}
+              <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
+                <div className="w-full sm:w-60">
+                  <MonthYearPicker
+                    value={profileMonth}
+                    onChange={async (m) => {
+                      setProfileMonth(m);
+                      if (profileStaff) await loadProfileData(profileStaff, m);
+                    }}
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={async () => {
+                      if (!profileStaff?._id) return;
+                      try {
+                        await apiMarkLeave(profileStaff._id);
+                        await loadProfileData(profileStaff, profileMonth);
+                        toast({ title: 'Marked leave for today' });
+                      } catch (err:any) {
+                        toast({ variant:'destructive', title:'Failed to mark leave', description: err.message||'Server error' });
+                      }
+                    }}
+                  >
+                    Mark Leave (Today)
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={async () => {
+                      if (!profileStaff?._id) return;
+                      try {
+                        await apiMarkAbsent(profileStaff._id);
+                        await loadProfileData(profileStaff, profileMonth);
+                        toast({ title: 'Marked absent for today' });
+                      } catch (err:any) {
+                        toast({ variant:'destructive', title:'Failed to mark absent', description: err.message||'Server error' });
+                      }
+                    }}
+                  >
+                    Mark Absent (Today)
+                  </Button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <h3 className="font-medium">Total Leaves</h3>
                   <p>{selectedEmployee.totalLeaves || 0}</p>
@@ -1592,7 +1707,7 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
                 </div>
               </div>
               
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <h3 className="font-medium">Base Salary</h3>
                   <p>{(selectedEmployee.salary || 0).toLocaleString()}</p>
@@ -1603,6 +1718,41 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
                 </div>
               </div>
               
+              {/* Deductions breakdown for the selected month */}
+              {(() => {
+                const toMinutes = (t:string) => {
+                  const m = String(t||'').match(/^(\d{2}):(\d{2})/);
+                  if (!m) return null as any;
+                  return Number(m[1]) * 60 + Number(m[2]);
+                };
+                const inLimit = toMinutes((attendanceSettings as any)?.clockInTime || '');
+                const outLimit = toMinutes((attendanceSettings as any)?.clockOutTime || '');
+                const rows = (selectedEmployee.attendance||[]) as any[];
+                const present = rows.filter(r => String(r.status||'').toLowerCase()==='present');
+                let late = 0, early = 0;
+                for(const r of present){
+                  const cinM = toMinutes(String(r.checkIn||r.checkInTime||''));
+                  const coutM = toMinutes(String(r.checkOut||r.checkOutTime||''));
+                  if (inLimit!=null && cinM!=null && cinM>inLimit) late++;
+                  if (outLimit!=null && coutM!=null && coutM<outLimit) early++;
+                }
+                const leave = (rows.filter(r => String(r.status||'').toLowerCase()==='leave').length) || 0;
+                const perLate = Number((attendanceSettings as any)?.lateDeduction||0);
+                const perEarly = Number((attendanceSettings as any)?.earlyOutDeduction||(attendanceSettings as any)?.earlyLeaveDeduction||0);
+                const perLeave = Number((attendanceSettings as any)?.leaveDeduction||(attendanceSettings as any)?.absentDeduction||0);
+                const lateAmt = perLate*late;
+                const earlyAmt = perEarly*early;
+                const leaveAmt = perLeave*leave;
+                return (
+                  <div className="rounded-md border p-3 text-sm">
+                    <div className="font-medium mb-2">Monthly Breakdown</div>
+                    <div className="text-gray-700">Late Arrivals ({late}): <span className="text-red-600">-{lateAmt.toLocaleString()} PKR</span></div>
+                    <div className="text-gray-700">Early Outs ({early}): <span className="text-red-600">-{earlyAmt.toLocaleString()} PKR</span></div>
+                    <div className="text-gray-700">Leaves ({leave}): <span className="text-red-600">-{leaveAmt.toLocaleString()} PKR</span></div>
+                  </div>
+                );
+              })()}
+
               <div>
                 <h3 className="font-medium">Net Salary</h3>
                 <p>{Math.max(0, (Number(selectedEmployee.salary || 0) - Number(selectedEmployee.totalDeductions || 0))).toLocaleString()}</p>
@@ -1610,7 +1760,7 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
               
               <div>
                 <h3 className="font-medium">Clock In/Out History</h3>
-                <div className="space-y-2 mt-2">
+                <div className="space-y-2 mt-2 max-h-[40vh] overflow-y-auto pr-1">
                   {(selectedEmployee.attendance && selectedEmployee.attendance.length > 0) ? (
                     selectedEmployee.attendance.map((entry: any) => (
                       <div key={entry._id || entry.date} className="flex justify-between">

@@ -19,7 +19,6 @@ import ReportGenerator from "@/components/lab compoenents/results/ReportGenerato
 import ReportDesigner from "@/components/lab compoenents/reports/ReportDesigner";
 import InventoryManagement from "@/components/lab compoenents/inventory/InventoryManagement";
 import SuppliersPage from "@/components/lab compoenents/suppliers/SuppliersPage";
-import PurchaseHistory from "@/components/lab compoenents/suppliers/PurchaseHistory";
 import StaffAttendance from "@/components/lab compoenents/staff attendance/StaffAttendance";
 import Settings from "@/components/lab compoenents/common/Settings";
 import Notifications from "@/components/lab compoenents/common/Notifications";
@@ -42,7 +41,6 @@ export type CurrentView =
   | "report-designer" 
   | "inventory" 
   | "suppliers"
-  | "purchase-history"
   | "staff-attendance" 
   | "settings" 
   | "notifications"
@@ -63,7 +61,6 @@ const Index = () => {
   const [authMode, setAuthMode] = useState<"login" | "signup">("login");
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
-  const [phSupplier, setPhSupplier] = useState<{ id?: string; name?: string } | null>(null);
 
   const handleLogin = (role: UserRole) => {
     setCurrentRole(role);
@@ -84,10 +81,6 @@ const Index = () => {
   };
 
   const handleViewChange = (view: CurrentView) => {
-    if (view === "purchase-history") {
-      // Clear any supplier filter when user navigates via menu
-      setPhSupplier(null);
-    }
     setCurrentView(view);
   };
 
@@ -101,22 +94,6 @@ const Index = () => {
     };
   }, []);
 
-  useEffect(() => {
-    const onOpenPh = (e: Event) => {
-      try {
-        const detail = (e as CustomEvent<{ supplierId: string; supplierName: string }>).detail;
-        if (detail) {
-          setPhSupplier({ id: detail.supplierId, name: detail.supplierName });
-          setCurrentView("purchase-history");
-        }
-      } catch {
-        // ignore malformed events
-      }
-    };
-    window.addEventListener("openPurchaseHistoryForSupplier", onOpenPh as EventListener);
-    return () => window.removeEventListener("openPurchaseHistoryForSupplier", onOpenPh as EventListener);
-  }, []);
-
   const renderContent = () => {
     if (currentView === "settings") return <Settings />;
     if (currentView === "notifications") return <Notifications />;
@@ -126,7 +103,6 @@ const Index = () => {
     if (currentView === "appointments") return <Appointment />;
     if (currentView === "appointments-history") return <AppointmentsHistory />;
     if (currentView === "suppliers") return <SuppliersPage />;
-    if (currentView === "purchase-history") return <PurchaseHistory supplierId={phSupplier?.id} supplierName={phSupplier?.name} />;
     if (currentView === "staff-attendance") return <StaffAttendance isUrdu={false} />;
     if (currentView === "user-management") return <UserManagement />;
     if (currentView === "samples") return <SamplesPage />;

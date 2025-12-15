@@ -3,6 +3,7 @@ import { DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { api } from "@/lib/api";
 
 interface ItemOption { _id: string; name: string }
 interface Props {
@@ -27,23 +28,11 @@ const UpdateStockDialog: React.FC<Props> = ({ itemId, items, currentUnitsPerPack
   useEffect(() => {
     const id = selectedId || itemId;
     if (!id) return;
-    const token = localStorage.getItem('token');
     let cancelled = false;
     (async () => {
       try {
-        // Try to get single item first
-        let res = await fetch(`/api/lab/inventory/inventory/${id}`, { headers: { Authorization: `Bearer ${token}` } });
-        let data: any | null = null;
-        if (res.ok) {
-          data = await res.json();
-        } else {
-          // Fallback: fetch list and find
-          res = await fetch(`/api/lab/inventory/inventory`, { headers: { Authorization: `Bearer ${token}` } });
-          if (res.ok) {
-            const arr = await res.json();
-            data = (arr || []).find((x: any) => String(x._id) === String(id));
-          }
-        }
+        const res = await api.get(`/lab/inventory/${id}`);
+        const data: any | null = res?.data || null;
         if (!data || cancelled) return;
         if (data.itemsPerPack != null) setItemsPerPack(String(data.itemsPerPack));
         if (data.buyPricePerPack != null) setBuyPricePerPack(String(data.buyPricePerPack));
@@ -74,7 +63,6 @@ const UpdateStockDialog: React.FC<Props> = ({ itemId, items, currentUnitsPerPack
   const save = async () => {
     setSaving(true);
     try {
-      const token = localStorage.getItem('token');
       const payload: any = {
         packs: parseFloat(packs) || 0,
         itemsPerPack: parseFloat(itemsPerPack) || 0,
@@ -85,16 +73,12 @@ const UpdateStockDialog: React.FC<Props> = ({ itemId, items, currentUnitsPerPack
       if (expiry) payload.expiryDate = new Date(expiry);
       const targetId = selectedId || itemId;
       if (!targetId) throw new Error('Please select an item');
-      const res = await fetch(`/api/lab/inventory/inventory/${targetId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify(payload)
-      });
-      if (!res.ok) throw new Error('Failed to update stock');
+      await api.put(`/lab/inventory/${targetId}`, payload);
       await onUpdated();
       onClose();
     } catch (e) {
-      alert((e as Error).message);
+      console.error("Failed to update stock", e);
+      alert('Failed to update stock');
     } finally {
       setSaving(false);
     }

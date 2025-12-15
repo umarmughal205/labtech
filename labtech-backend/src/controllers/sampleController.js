@@ -1,5 +1,7 @@
 const Sample = require('../models/Sample');
 const Test = require('../models/Test');
+const Profiling = require('../models/Profiling');
+const InventoryItem = require('../models/InventoryItem');
 
 function generateSampleNumber(year, seq) {
   const num = String(seq).padStart(3, '0');
@@ -75,6 +77,68 @@ async function createSample(req, res) {
       priority: body.priority || 'normal',
       status,
     });
+    // Decrease inventory stock for used consumables
+    try {
+      if (Array.isArray(consumables) && consumables.length) {
+        for (const c of consumables) {
+          if (!c || !c.item) continue;
+          try {
+            const item = await InventoryItem.findById(c.item);
+            if (!item) continue;
+            const qty = Number(c.quantity) || 0;
+            if (qty <= 0) continue;
+            const current = Number(item.currentStock) || 0;
+            const nextStock = Math.max(0, current - qty);
+            item.currentStock = nextStock;
+            await item.save();
+          } catch (invErr) {
+            console.error('Error updating inventory for consumable usage:', invErr);
+          }
+        }
+      }
+    } catch (invOuterErr) {
+      console.error('Error in consumables inventory update block:', invOuterErr);
+      // Do not fail main request because of inventory issues
+    }
+    // Update or create profiling record based on CNIC/phone
+    try {
+      if (body.cnic || body.phone) {
+        const filter = [];
+        if (body.cnic) filter.push({ cnic: body.cnic });
+        if (body.phone) filter.push({ phone: body.phone });
+        const now = new Date();
+
+        const testsNames = Array.isArray(tests)
+          ? tests.map((t) => t && t.name).filter(Boolean)
+          : [];
+
+        const existing = await Profiling.findOne(filter.length > 1 ? { $or: filter } : filter[0]);
+        if (existing) {
+          const set = new Set(Array.isArray(existing.sampleTypes) ? existing.sampleTypes : []);
+          for (const n of testsNames) set.add(n);
+          existing.sampleTypes = Array.from(set);
+          existing.numberOfVisits = (existing.numberOfVisits || 0) + 1;
+          existing.lastVisitDate = now;
+          if (!existing.name && body.patientName) existing.name = body.patientName;
+          if (!existing.cnic && body.cnic) existing.cnic = body.cnic;
+          if (!existing.phone && body.phone) existing.phone = body.phone;
+          await existing.save();
+        } else {
+          await Profiling.create({
+            name: body.patientName || 'Unknown',
+            cnic: body.cnic || '',
+            phone: body.phone || '',
+            numberOfVisits: 1,
+            lastVisitDate: now,
+            sampleTypes: testsNames,
+            profilingNotes: '',
+          });
+        }
+      }
+    } catch (profilingErr) {
+      console.error('Error updating profiling from sample:', profilingErr);
+      // Do not fail main request because of profiling issues
+    }
 
     return res.status(201).json(sample);
   } catch (err) {

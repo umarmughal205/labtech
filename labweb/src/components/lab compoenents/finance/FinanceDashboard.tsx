@@ -16,6 +16,7 @@ import {
   Filter
 } from "lucide-react";
 import { getAllLedgerEntries, LabLedgerEntry } from "@/components/lab compoenents/finance/labFinanceStore";
+import { api } from "@/lib/api";
 
 interface FinanceRecord {
   id: string;
@@ -63,32 +64,40 @@ const FinanceDashboard = () => {
   const [pageSize, setPageSize] = useState<number>(10);
   const txSectionRef = useRef<HTMLDivElement | null>(null);
 
-  // load transactions from local ledger store
+  // load transactions from backend finance ledger
   useEffect(() => {
-    const entries = getAllLedgerEntries();
-    const mapped: FinanceRecord[] = entries.map((e: LabLedgerEntry) => ({
-      id: e.id,
-      type: e.type,
-      category: e.category,
-      description: e.description,
-      amount: e.amount,
-      date: new Date(e.date),
-      reference: e.reference,
-    }));
-    setFinanceData(mapped);
+    (async () => {
+      try {
+        const entries = await getAllLedgerEntries();
+        const mapped: FinanceRecord[] = entries.map((e: LabLedgerEntry) => ({
+          id: e.id,
+          type: e.type,
+          category: e.category,
+          description: e.description,
+          amount: e.amount,
+          date: new Date(e.date),
+          reference: e.reference,
+        }));
+        setFinanceData(mapped);
+      } catch (err) {
+        console.error("Failed to load finance ledger entries", err as any);
+        setFinanceData([]);
+      }
+    })();
   }, []);
 
-  // fetch inventory for stock value
+  // fetch inventory for stock value (backend API)
   useEffect(() => {
-    // Prefer finance_token when used inside Finance portal
-    const token = localStorage.getItem('finance_token') || localStorage.getItem('token');
-    fetch(`/api/lab/inventory/inventory`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      credentials: 'include'
-    })
-      .then(res => res.ok ? res.json() : [])
-      .then(rows => Array.isArray(rows) ? setInventory(rows) : setInventory([]))
-      .catch(() => setInventory([]));
+    (async () => {
+      try {
+        const res = await api.get("/lab/inventory");
+        const rows = Array.isArray(res.data) ? res.data : [];
+        setInventory(rows);
+      } catch (err) {
+        console.error("Failed to load inventory for finance dashboard", err as any);
+        setInventory([]);
+      }
+    })();
   }, []);
 
   // compute total income from ledger

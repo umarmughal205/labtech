@@ -33,7 +33,6 @@ import {
   Truck,
   Microscope,
   LayoutDashboard,
-  History,
   Users
 } from "lucide-react";
 
@@ -108,7 +107,6 @@ const Navigation: React.FC<NavigationProps> = ({
       { id: "reports", label: "Reports", icon: FileText },
       { id: "inventory" as CurrentView, label: "Inventory", icon: Package },
       { id: "suppliers" as CurrentView, label: "Suppliers", icon: Truck },
-      { id: "purchase-history" as CurrentView, label: "Purchase History", icon: History },
       { id: "staff-attendance" as CurrentView, label: "Staff Attendance", icon: UserCheck },
       { id: "user-management" as CurrentView, label: "User Management", icon: UserCircle },
       { id: "notifications" as CurrentView, label: "Notifications", icon: Bell },
@@ -174,11 +172,6 @@ const Navigation: React.FC<NavigationProps> = ({
       <div className="flex flex-col space-y-1 w-full">
         {menuItems.map((item) => {
           const Icon = item.icon;
-
-          // Hide standalone top-level Purchase History item (now under Suppliers submenu)
-          if (item.id === "purchase-history") {
-            return null;
-          }
 
           // Custom rendering for Appointments with collapsible submenu
           if (item.id === "appointments") {
@@ -296,14 +289,6 @@ const Navigation: React.FC<NavigationProps> = ({
                       onClick={() => onViewChange("suppliers")}
                     >
                       <span>Suppliers</span>
-                    </Button>
-                    <Button
-                      variant={currentView === "purchase-history" ? "default" : "ghost"}
-                      size="sm"
-                      className="flex items-center justify-start text-sm"
-                      onClick={() => onViewChange("purchase-history")}
-                    >
-                      <span>Purchase History</span>
                     </Button>
                   </div>
                 )}

@@ -27,6 +27,7 @@ import UpdateStockDialog from './UpdateStockDialog';
 import AdjustLooseItemsDialog from './AdjustLooseItemsDialog';
 import InventoryToolbar from './InventoryToolbar';
 import InventoryTable from './InventoryTable';
+import { api } from "@/lib/api";
 
 // TODO: Move to env config
 // Lab inventory routes are mounted at /api/lab/inventory
@@ -47,7 +48,14 @@ interface InventoryItem {
   supplier: string;
   location: string;
   expiryDate?: Date | string;
-  lastRestocked?: Date;
+  lastRestocked?: Date | string;
+  // Optional pricing/pack fields
+  packs?: number;
+  itemsPerPack?: number;
+  salePricePerPack?: number;
+  salePricePerUnit?: number;
+  buyPricePerPack?: number;
+  invoiceNumber?: string;
 }
 
 const INVENTORY_STORAGE_KEY = "lab_inventory_mock_v1";
@@ -164,17 +172,55 @@ const InventoryManagement = () => {
     }
   }, [showQuickUpdate, quickItemId, inventory]);
 
-  // fetch categories & inventory on mount (mock/local mode)
+  // fetch categories & inventory on mount (backend first, fallback to local)
   const loadAll = React.useCallback(async () => {
-    const loaded = loadInventoryFromStorage();
-    setInventory(loaded);
-    const map = new Map<string, Category>();
-    loaded.forEach((it) => {
-      if (it.category && !map.has(it.category._id)) {
-        map.set(it.category._id, it.category);
-      }
-    });
-    setDbCategories(Array.from(map.values()));
+    try {
+      const token = localStorage.getItem("token");
+      const res = await api.get(
+        "/lab/inventory",
+        token ? { headers: { Authorization: `Bearer ${token}` } } : undefined
+      );
+      const data = Array.isArray(res.data) ? res.data : [];
+      const mapped: InventoryItem[] = data.map((it: any) => ({
+        _id: String(it._id),
+        name: it.name || "",
+        category: (it.category as any) || { _id: "", name: "" },
+        currentStock: it.currentStock ?? 0,
+        minThreshold: it.minThreshold ?? 0,
+        maxCapacity: it.maxCapacity ?? 0,
+        unit: it.unit || "",
+        costPerUnit: it.costPerUnit ?? 0,
+        supplier: it.supplier || "",
+        location: it.location || "",
+        expiryDate: it.expiryDate || undefined,
+        lastRestocked: it.lastRestocked || undefined,
+        packs: it.packs,
+        itemsPerPack: it.itemsPerPack,
+        salePricePerPack: it.salePricePerPack,
+        salePricePerUnit: it.salePricePerUnit,
+        buyPricePerPack: it.buyPricePerPack,
+        invoiceNumber: it.invoiceNumber,
+      }));
+      setInventory(mapped);
+      const map = new Map<string, Category>();
+      mapped.forEach((it) => {
+        if (it.category && it.category._id && !map.has(it.category._id)) {
+          map.set(it.category._id, it.category);
+        }
+      });
+      setDbCategories(Array.from(map.values()));
+    } catch (err) {
+      console.error("Failed to load inventory from backend, falling back to local storage", err as any);
+      const loaded = loadInventoryFromStorage();
+      setInventory(loaded);
+      const map = new Map<string, Category>();
+      loaded.forEach((it) => {
+        if (it.category && !map.has(it.category._id)) {
+          map.set(it.category._id, it.category);
+        }
+      });
+      setDbCategories(Array.from(map.values()));
+    }
   }, []);
 
   React.useEffect(() => {
@@ -276,24 +322,72 @@ const InventoryManagement = () => {
     }, 0);
   };
 
-  const handleAddItem = async (newItem: Omit<InventoryItem, '_id' | 'lastRestocked'>) => {
-    const created: InventoryItem = {
-      ...newItem,
-      _id: `inv_${Date.now()}`,
-      lastRestocked: new Date(),
-    };
-    setInventory((prev) => {
-      const next = [...prev, created];
-      saveInventoryToStorage(next);
-      return next;
-    });
+  const handleAddItem = async (newItem: any) => {
+    try {
+      // newItem.category is a category _id from AddNewItemForm
+      const catId: string = newItem.category;
+      const cat = dbCategories.find(c => c._id === catId);
 
-    toast({
-      title: "Item Added",
-      description: `${created.name} has been added to inventory.`,
-    });
+      const payload: any = {
+        name: newItem.name,
+        category: cat ? { _id: cat._id, name: cat.name } : undefined,
+        currentStock: newItem.currentStock,
+        minThreshold: newItem.minThreshold,
+        maxCapacity: newItem.maxCapacity || 0,
+        unit: newItem.unit,
+        costPerUnit: newItem.costPerUnit,
+        supplier: newItem.supplier,
+        location: newItem.location,
+        expiryDate: newItem.expiryDate,
+        // pack/pricing fields
+        packs: newItem.packs,
+        itemsPerPack: newItem.itemsPerPack,
+        buyPricePerPack: newItem.buyPricePerPack,
+        salePricePerPack: newItem.salePricePerPack,
+        salePricePerUnit: newItem.salePricePerUnit,
+        invoiceNumber: newItem.invoiceNumber,
+      };
 
-    setIsAddingItem(false);
+      const token = localStorage.getItem("token");
+      const res = await api.post(
+        "/lab/inventory",
+        payload,
+        token ? { headers: { Authorization: `Bearer ${token}` } } : undefined
+      );
+      const it: any = res.data || {};
+      const created: InventoryItem = {
+        _id: String(it._id),
+        name: it.name || newItem.name,
+        category: (it.category as any) || (cat || { _id: "", name: "" }),
+        currentStock: it.currentStock ?? newItem.currentStock ?? 0,
+        minThreshold: it.minThreshold ?? newItem.minThreshold ?? 0,
+        maxCapacity: it.maxCapacity ?? newItem.maxCapacity ?? 0,
+        unit: it.unit || newItem.unit,
+        costPerUnit: it.costPerUnit ?? newItem.costPerUnit ?? 0,
+        supplier: it.supplier || newItem.supplier || "",
+        location: it.location || newItem.location || "",
+        expiryDate: it.expiryDate || newItem.expiryDate,
+        lastRestocked: it.lastRestocked || new Date().toISOString(),
+        packs: it.packs ?? newItem.packs,
+        itemsPerPack: it.itemsPerPack ?? newItem.itemsPerPack,
+        salePricePerPack: it.salePricePerPack ?? newItem.salePricePerPack,
+        salePricePerUnit: it.salePricePerUnit ?? newItem.salePricePerUnit,
+        buyPricePerPack: it.buyPricePerPack ?? newItem.buyPricePerPack,
+        invoiceNumber: it.invoiceNumber ?? newItem.invoiceNumber,
+      };
+
+      setInventory((prev) => [...prev, created]);
+
+      toast({
+        title: "Item Added",
+        description: `${created.name} has been added to inventory.`,
+      });
+
+      setIsAddingItem(false);
+    } catch (err: any) {
+      console.error("Failed to add inventory item", err?.response || err);
+      toast({ title: "Error", description: "Failed to add inventory item", variant: "destructive" });
+    }
   };
 
   const handleUpdateStock = (_id: string, newStock: number) => {

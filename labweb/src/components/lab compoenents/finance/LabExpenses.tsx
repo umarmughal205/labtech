@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Download, DollarSign, Filter, Search } from "lucide-react";
-import { getExpenseEntries, addLedgerEntry } from "@/components/lab compoenents/finance/labFinanceStore";
+import { api } from "@/lib/api";
 
 interface ExpenseRecord {
   id: string;
@@ -14,6 +14,9 @@ interface ExpenseRecord {
   amount: number;
   date: Date;
   reference?: string;
+  supplierName?: string;
+  inventoryItemName?: string;
+  quantity?: number;
 }
 
 const categories = [
@@ -30,21 +33,56 @@ const LabExpenses = () => {
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [newExpense, setNewExpense] = useState({ description: "", amount: "", category: categories[0] });
+  const [suppliers, setSuppliers] = useState<any[]>([]);
+  const [inventoryItems, setInventoryItems] = useState<any[]>([]);
+  const [selectedSupplierId, setSelectedSupplierId] = useState<string>("");
+  const [selectedItemId, setSelectedItemId] = useState<string>("");
+  const [quantity, setQuantity] = useState<string>("1");
 
   // pagination
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
   useEffect(() => {
-    const loaded = getExpenseEntries().map((e) => ({
-      id: e.id,
-      category: e.category,
-      description: e.description,
-      amount: e.amount,
-      date: new Date(e.date),
-      reference: e.reference,
-    }));
-    setExpenses(loaded);
+    (async () => {
+      try {
+        const res = await api.get("/lab/expenses");
+        const data = Array.isArray(res.data) ? res.data : [];
+        const loaded = data.map((e: any) => ({
+          id: String(e._id),
+          category: e.category || "",
+          description: e.description || "",
+          amount: Number(e.amount) || 0,
+          date: e.date ? new Date(e.date) : new Date(),
+          reference: e.reference,
+          supplierName: e.supplierName || "",
+          inventoryItemName: e.inventoryItemName || "",
+          quantity: typeof e.quantity === "number" ? e.quantity : undefined,
+        }));
+        setExpenses(loaded);
+      } catch (err) {
+        console.error("Failed to load lab expenses", err as any);
+        setExpenses([]);
+      }
+    })();
+  }, []);
+
+  // fetch suppliers and inventory for linking
+  useEffect(() => {
+    (async () => {
+      try {
+        const [supRes, invRes] = await Promise.all([
+          api.get("/lab/suppliers"),
+          api.get("/lab/inventory"),
+        ]);
+        setSuppliers(Array.isArray(supRes.data) ? supRes.data : []);
+        setInventoryItems(Array.isArray(invRes.data) ? invRes.data : []);
+      } catch (err) {
+        console.error("Failed to load suppliers or inventory for expenses", err as any);
+        setSuppliers([]);
+        setInventoryItems([]);
+      }
+    })();
   }, []);
 
   const filtered = useMemo(() => {
@@ -86,25 +124,43 @@ const LabExpenses = () => {
 
   const addExpense = async () => {
     if (!newExpense.description || !newExpense.amount) return;
-    const created = addLedgerEntry({
-      type: "expense",
-      source: "Expense",
+    const supplier = suppliers.find((s: any) => String(s._id) === selectedSupplierId);
+    const item = inventoryItems.find((i: any) => String(i._id) === selectedItemId);
+    const qtyNum = Math.max(0, parseFloat(quantity) || 0);
+    const payload = {
       category: newExpense.category,
       description: newExpense.description,
       amount: parseFloat(newExpense.amount),
       date: new Date().toISOString(),
-    });
-    const rec: ExpenseRecord = {
-      id: created.id,
-      category: created.category,
-      description: created.description,
-      amount: created.amount,
-      date: new Date(created.date),
-      reference: created.reference,
+      supplierId: supplier ? String(supplier._id) : undefined,
+      supplierName: supplier ? (supplier.name || supplier.contactPerson || "") : undefined,
+      inventoryItemId: item ? String(item._id) : undefined,
+      inventoryItemName: item ? (item.name || "") : undefined,
+      quantity: qtyNum || undefined,
     };
-    setExpenses((prev) => [rec, ...prev]);
-    setNewExpense({ description: "", amount: "", category: categories[0] });
-    setIsAddOpen(false);
+    try {
+      const res = await api.post("/lab/expenses", payload);
+      const created: any = res.data || {};
+      const rec: ExpenseRecord = {
+        id: String(created._id),
+        category: created.category || payload.category,
+        description: created.description || payload.description,
+        amount: Number(created.amount ?? payload.amount) || 0,
+        date: created.date ? new Date(created.date) : new Date(),
+        reference: created.reference,
+        supplierName: created.supplierName || payload.supplierName,
+        inventoryItemName: created.inventoryItemName || payload.inventoryItemName,
+        quantity: typeof created.quantity === "number" ? created.quantity : payload.quantity,
+      };
+      setExpenses((prev) => [rec, ...prev]);
+      setNewExpense({ description: "", amount: "", category: categories[0] });
+      setSelectedSupplierId("");
+      setSelectedItemId("");
+      setQuantity("1");
+      setIsAddOpen(false);
+    } catch (err) {
+      console.error("Failed to create lab expense", err as any);
+    }
   };
 
   return (
@@ -132,6 +188,45 @@ const LabExpenses = () => {
                 <div className="grid grid-cols-4 items-center gap-4">
                   <Label htmlFor="amount" className="text-right">Amount (PKR)</Label>
                   <Input id="amount" type="number" className="col-span-3" value={newExpense.amount} onChange={(e)=>setNewExpense({...newExpense, amount: e.target.value})} />
+                </div>
+                <div className="grid grid-cols-4 items-center gap-4">
+                  <Label htmlFor="supplier" className="text-right">Supplier</Label>
+                  <select
+                    id="supplier"
+                    className="col-span-3 border rounded-md p-2"
+                    value={selectedSupplierId}
+                    onChange={(e)=>setSelectedSupplierId(e.target.value)}
+                  >
+                    <option value="">-- Optional: Select supplier --</option>
+                    {suppliers.map((s:any) => (
+                      <option key={s._id} value={s._id}>{s.name || s.contactPerson || s.contactInfo}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="grid grid-cols-4 items-center gap-4">
+                  <Label htmlFor="item" className="text-right">Inventory Item</Label>
+                  <select
+                    id="item"
+                    className="col-span-3 border rounded-md p-2"
+                    value={selectedItemId}
+                    onChange={(e)=>setSelectedItemId(e.target.value)}
+                  >
+                    <option value="">-- Optional: Select item --</option>
+                    {inventoryItems.map((it:any) => (
+                      <option key={it._id} value={it._id}>{it.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="grid grid-cols-4 items-center gap-4">
+                  <Label htmlFor="qty" className="text-right">Quantity</Label>
+                  <Input
+                    id="qty"
+                    type="number"
+                    className="col-span-3"
+                    value={quantity}
+                    onChange={(e)=>setQuantity(e.target.value)}
+                    min={0}
+                  />
                 </div>
                 <div className="grid grid-cols-4 items-center gap-4">
                   <Label htmlFor="category" className="text-right">Category</Label>
@@ -172,6 +267,13 @@ const LabExpenses = () => {
                 <div>
                   <div className="font-medium">{e.description}</div>
                   <div className="text-sm text-gray-600">{e.category}</div>
+                  {(e.supplierName || e.inventoryItemName) && (
+                    <div className="text-xs text-gray-500">
+                      {e.supplierName && <span>Supplier: {e.supplierName}</span>}
+                      {e.supplierName && e.inventoryItemName && " • "}
+                      {e.inventoryItemName && <span>Item: {e.inventoryItemName}{e.quantity ? ` (Qty: ${e.quantity})` : ""}</span>}
+                    </div>
+                  )}
                   <div className="text-xs text-gray-500">{e.date.toLocaleDateString()} {e.reference ? `• Ref: ${e.reference}` : ''}</div>
                 </div>
                 <div className="text-red-600 font-bold">- PKR {e.amount.toFixed(2)}</div>

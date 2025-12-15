@@ -36,6 +36,7 @@ import {
 } from "@/components/lab compoenents/suppliers/purchaseOrdersStore";
 import { useToast } from "@/hooks/use-toast";
 import { addLedgerEntry } from "@/components/lab compoenents/finance/labFinanceStore";
+import { api } from "@/lib/api";
 
 const getStatusBadgeClasses = (status: PurchaseOrderRecord["status"]) => {
   switch (status) {
@@ -70,11 +71,13 @@ const PurchaseHistory: React.FC<PurchaseHistoryProps> = ({ supplierId, supplierN
 
   // Load from shared purchase order store (optionally filtered by supplier)
   useEffect(() => {
-    const loaded = supplierId
-      ? getPurchaseOrdersBySupplier(supplierId)
-      : getAllPurchaseOrders();
-    setOrders(loaded);
-    setPage(1);
+    (async () => {
+      const loaded = supplierId
+        ? await getPurchaseOrdersBySupplier(supplierId)
+        : await getAllPurchaseOrders();
+      setOrders(loaded);
+      setPage(1);
+    })();
   }, [supplierId]);
 
   // Local helper types for inventory sync
@@ -98,16 +101,11 @@ const PurchaseHistory: React.FC<PurchaseHistoryProps> = ({ supplierId, supplierN
     lastRestocked?: string | Date;
   }
 
-  const INVENTORY_STORAGE_KEY = "lab_inventory_mock_v1";
-
-  const applyOrderToInventory = (order: PurchaseOrderRecord) => {
+  const syncOrderToInventory = async (order: PurchaseOrderRecord) => {
     try {
-      const raw = localStorage.getItem(INVENTORY_STORAGE_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as InventoryItem[];
-      if (!Array.isArray(parsed)) return;
+      const res = await api.get("/lab/inventory");
+      const existing = Array.isArray(res.data) ? (res.data as InventoryItem[]) : [];
 
-      let changed = false;
       let updatedCount = 0;
       let createdCount = 0;
 
@@ -116,22 +114,23 @@ const PurchaseHistory: React.FC<PurchaseHistoryProps> = ({ supplierId, supplierN
         name: "Uncategorized",
       };
 
-      order.items.forEach((poItem, idx) => {
+      for (let idx = 0; idx < order.items.length; idx++) {
+        const poItem = order.items[idx];
         const rawName = poItem.description?.trim();
         const name = rawName.toLowerCase();
-        if (!name) return;
+        if (!name) continue;
 
-        const match = parsed.find((inv) => inv.name.trim().toLowerCase() === name);
+        const match = existing.find((inv) => inv.name.trim().toLowerCase() === name);
 
         if (match) {
-          match.currentStock = (match.currentStock || 0) + (poItem.quantity || 0);
-          match.lastRestocked = new Date().toISOString();
-          changed = true;
+          const newStock = (match.currentStock || 0) + (poItem.quantity || 0);
+          await api.put(`/lab/inventory/${match._id}`, {
+            currentStock: newStock,
+            lastRestocked: new Date().toISOString(),
+          });
           updatedCount += 1;
         } else {
-          // Auto-create a new inventory item when no match exists
-          const newItem: InventoryItem = {
-            _id: `inv_${Date.now()}_${idx}`,
+          const payload = {
             name: rawName || `PO Item ${idx + 1}`,
             category: defaultCategory,
             currentStock: poItem.quantity || 0,
@@ -145,15 +144,12 @@ const PurchaseHistory: React.FC<PurchaseHistoryProps> = ({ supplierId, supplierN
             lastRestocked: new Date().toISOString(),
           };
 
-          parsed.push(newItem);
-          changed = true;
+          await api.post("/lab/inventory", payload);
           createdCount += 1;
         }
-      });
+      }
 
-      if (changed) {
-        localStorage.setItem(INVENTORY_STORAGE_KEY, JSON.stringify(parsed));
-
+      if (updatedCount > 0 || createdCount > 0) {
         const parts: string[] = [];
         if (updatedCount > 0) parts.push(`${updatedCount} existing item${updatedCount > 1 ? "s" : ""} updated`);
         if (createdCount > 0) parts.push(`${createdCount} new item${createdCount > 1 ? "s" : ""} created`);
@@ -172,8 +168,9 @@ const PurchaseHistory: React.FC<PurchaseHistoryProps> = ({ supplierId, supplierN
           variant: "destructive",
         });
       }
-    } catch {
-      // ignore inventory sync errors
+    } catch (err: any) {
+      console.error("Failed to sync order to inventory", err?.response || err);
+      toast({ title: "Inventory Sync Failed", description: "Could not update inventory from this PO.", variant: "destructive" });
     }
   };
 
@@ -467,15 +464,16 @@ const PurchaseHistory: React.FC<PurchaseHistoryProps> = ({ supplierId, supplierN
                     className="bg-emerald-500 hover:bg-emerald-600 text-white rounded-full px-3 py-1 h-7 text-xs"
                     disabled={selectedOrder.status === "Delivered"}
                     onClick={() => {
-                      // Update PO status
-                      updatePurchaseOrderStatus(selectedOrder.id, "Delivered");
+                      (async () => {
+                        try {
+                          await updatePurchaseOrderStatus(selectedOrder.id, "Delivered");
+                          await syncOrderToInventory(selectedOrder);
+                        } catch {}
+                      })();
                       setOrders((prev) =>
                         prev.map((o) => (o.id === selectedOrder.id ? { ...o, status: "Delivered" } : o))
                       );
                       setSelectedOrder((prev) => (prev ? { ...prev, status: "Delivered" } : prev));
-
-                      // Sync to inventory mock store
-                      applyOrderToInventory(selectedOrder);
 
                       // Record expense in finance ledger for this PO
                       try {
@@ -499,7 +497,11 @@ const PurchaseHistory: React.FC<PurchaseHistoryProps> = ({ supplierId, supplierN
                     className="bg-red-500 hover:bg-red-600 text-white rounded-full px-3 py-1 h-7 text-xs"
                     disabled={selectedOrder.status === "Cancelled"}
                     onClick={() => {
-                      updatePurchaseOrderStatus(selectedOrder.id, "Cancelled");
+                      (async () => {
+                        try {
+                          await updatePurchaseOrderStatus(selectedOrder.id, "Cancelled");
+                        } catch {}
+                      })();
                       setOrders((prev) =>
                         prev.map((o) => (o.id === selectedOrder.id ? { ...o, status: "Cancelled" } : o))
                       );

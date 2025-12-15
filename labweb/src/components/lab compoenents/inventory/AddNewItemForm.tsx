@@ -261,8 +261,18 @@ const AddNewItemForm: React.FC<AddNewItemFormProps> = ({
           <div className="space-y-2">
             <Label>Supplier</Label>
             <div className="flex gap-2">
-              <select className="border rounded-md p-2 flex-1" value={newItem.supplier}
-                onChange={e=> setNewItem({ ...newItem, supplier: e.target.value })}
+              <select
+                className="border rounded-md p-2 flex-1"
+                value={newItem.supplier}
+                onChange={e => {
+                  const selected = e.target.value;
+                  setNewItem(prev => ({
+                    ...prev,
+                    supplier: selected,
+                    // If item name is still empty, auto-fill with supplier name
+                    name: prev.name || selected,
+                  }));
+                }}
               >
                 <option value="">Select supplier</option>
                 {(supplierList.length ? supplierList : suppliers).map(s => (
@@ -284,7 +294,12 @@ const AddNewItemForm: React.FC<AddNewItemFormProps> = ({
                     throw new Error(res.status === 401 ? 'Session expired. Please login again.' : (err.message || 'Failed to create supplier'));
                   }
                   setSupplierList(prev => [name, ...prev.filter(n => n.toLowerCase() !== name.toLowerCase())]);
-                  setNewItem(prev => ({ ...prev, supplier: name }));
+                  setNewItem(prev => ({
+                    ...prev,
+                    supplier: name,
+                    // If item name is empty, also auto-fill with this new supplier name
+                    name: prev.name || name,
+                  }));
                   setNewSupplier("");
                   toast({ title: 'Supplier Added', description: `${name} created successfully.` });
                 } catch (e) {

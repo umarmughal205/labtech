@@ -28,13 +28,13 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogFooter,
 } from "@/components/ui/dialog";
-import { Search, Filter, Plus, Eye, Edit2, MoreHorizontal, XCircle, ChevronDown, FileText, History } from "lucide-react";
-import { createPurchaseOrder, PurchaseOrderItem } from "@/components/lab compoenents/suppliers/purchaseOrdersStore";
+import { Search, Filter, Plus, Eye, Edit2, MoreHorizontal, XCircle, ChevronDown } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { api } from "@/lib/api";
 
 interface SupplierRecord {
   id: string;
@@ -116,15 +116,6 @@ const SuppliersPage: React.FC = () => {
   const [isViewOpen, setIsViewOpen] = useState(false);
   const [viewing, setViewing] = useState<SupplierRecord | null>(null);
 
-  const [isCreatePoOpen, setIsCreatePoOpen] = useState(false);
-  const [poSupplier, setPoSupplier] = useState<SupplierRecord | null>(null);
-  const [poForm, setPoForm] = useState({
-    description: "",
-    quantity: "",
-    unitPrice: "",
-    notes: "",
-  });
-
   const { toast } = useToast();
 
   const [addForm, setAddForm] = useState({
@@ -138,32 +129,41 @@ const SuppliersPage: React.FC = () => {
     contractEndDate: "",
   });
 
-  // Load suppliers from localStorage on first mount
+  // Load suppliers from backend on first mount
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(SUPPLIERS_STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as SupplierRecord[];
-        if (Array.isArray(parsed)) {
-          setSuppliers(parsed);
-        }
-      } else if (MOCK_SUPPLIERS.length > 0) {
-        // Fallback if you ever want starting data
-        setSuppliers(MOCK_SUPPLIERS);
+    let cancelled = false;
+    (async () => {
+      try {
+        const token = localStorage.getItem("token");
+        const res = await api.get(
+          "/lab/suppliers",
+          token ? { headers: { Authorization: `Bearer ${token}` } } : undefined
+        );
+        if (cancelled) return;
+        const data = Array.isArray(res.data) ? res.data : [];
+        const mapped: SupplierRecord[] = data.map((s: any) => ({
+          id: String(s._id),
+          name: s.name || "",
+          contactPerson: s.contactPerson || "",
+          contactInfo: s.contactInfo || s.email || "",
+          products: Array.isArray(s.products) ? s.products : [],
+          contractEndDate: s.contractEndDate || "",
+          status: (s.status as SupplierRecord["status"]) || "Active",
+          email: s.email || "",
+          phone: s.phone || "",
+          address: s.address || "",
+          contractStartDate: s.contractStartDate || "",
+        }));
+        setSuppliers(mapped);
+      } catch (err) {
+        console.error("Failed to load suppliers from backend", err as any);
+        setSuppliers([]);
       }
-    } catch (e) {
-      console.error("Failed to load suppliers from storage", e);
-    }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
-
-  // Persist suppliers whenever they change
-  useEffect(() => {
-    try {
-      localStorage.setItem(SUPPLIERS_STORAGE_KEY, JSON.stringify(suppliers));
-    } catch (e) {
-      console.error("Failed to save suppliers to storage", e);
-    }
-  }, [suppliers]);
 
   const [editForm, setEditForm] = useState({
     name: "",
@@ -211,7 +211,7 @@ const SuppliersPage: React.FC = () => {
     });
   };
 
-  const handleAddSupplier = () => {
+  const handleAddSupplier = async () => {
     if (!addForm.name || !addForm.contactPerson || !addForm.email) return;
 
     const products = addForm.products
@@ -221,23 +221,48 @@ const SuppliersPage: React.FC = () => {
 
     const status = computeStatus(addForm.contractEndDate, addForm.contractStartDate);
 
-    const newSupplier: SupplierRecord = {
-      id: `S${String(suppliers.length + 1).padStart(3, "0")}`,
+    const payload = {
       name: addForm.name,
       contactPerson: addForm.contactPerson,
       contactInfo: addForm.email,
-      products,
-      contractEndDate: addForm.contractEndDate,
-      status,
       email: addForm.email,
       phone: addForm.phone,
       address: addForm.address,
-      contractStartDate: addForm.contractStartDate,
+      products,
+      contractStartDate: addForm.contractStartDate || undefined,
+      contractEndDate: addForm.contractEndDate || undefined,
+      status,
     };
 
-    setSuppliers((prev) => [...prev, newSupplier]);
-    setIsAddOpen(false);
-    resetAddForm();
+    try {
+      const token = localStorage.getItem("token");
+      const res = await api.post(
+        "/lab/suppliers",
+        payload,
+        token ? { headers: { Authorization: `Bearer ${token}` } } : undefined
+      );
+      const s: any = res.data || {};
+      const created: SupplierRecord = {
+        id: String(s._id || `S${Date.now()}`),
+        name: s.name || addForm.name,
+        contactPerson: s.contactPerson || addForm.contactPerson,
+        contactInfo: s.contactInfo || s.email || addForm.email,
+        products: Array.isArray(s.products) ? s.products : products,
+        contractEndDate: s.contractEndDate || addForm.contractEndDate,
+        status: (s.status as SupplierRecord["status"]) || status,
+        email: s.email || addForm.email,
+        phone: s.phone || addForm.phone,
+        address: s.address || addForm.address,
+        contractStartDate: s.contractStartDate || addForm.contractStartDate,
+      };
+      setSuppliers((prev) => [...prev, created]);
+      setIsAddOpen(false);
+      resetAddForm();
+      toast({ title: "Supplier added", description: `${created.name} has been saved.` });
+    } catch (err: any) {
+      console.error("Failed to create supplier", err?.response || err);
+      toast({ title: "Error", description: "Failed to save supplier", variant: "destructive" });
+    }
   };
 
   const openEdit = (supplier: SupplierRecord) => {
@@ -257,7 +282,7 @@ const SuppliersPage: React.FC = () => {
     setIsViewOpen(true);
   };
 
-  const handleUpdateSupplier = () => {
+  const handleUpdateSupplier = async () => {
     if (!editing) return;
     if (!editForm.name || !editForm.contactPerson) return;
 
@@ -271,24 +296,48 @@ const SuppliersPage: React.FC = () => {
         ? "Cancelled"
         : computeStatus(editForm.contractEndDate, editing.contractStartDate);
 
-    setSuppliers((prev) =>
-      prev.map((s) =>
-        s.id === editing.id
-          ? {
-              ...s,
-              name: editForm.name,
-              contactPerson: editForm.contactPerson,
-              contactInfo: editForm.contactInfo,
-              products,
-              contractEndDate: editForm.contractEndDate,
-              status,
-            }
-          : s
-      )
-    );
+    const payload = {
+      name: editForm.name,
+      contactPerson: editForm.contactPerson,
+      contactInfo: editForm.contactInfo,
+      products,
+      contractStartDate: editing.contractStartDate,
+      contractEndDate: editForm.contractEndDate,
+      status,
+      email: editing.email,
+      phone: editing.phone,
+      address: editing.address,
+    };
 
-    setIsEditOpen(false);
-    setEditing(null);
+    try {
+      const token = localStorage.getItem("token");
+      const res = await api.put(
+        `/lab/suppliers/${editing.id}`,
+        payload,
+        token ? { headers: { Authorization: `Bearer ${token}` } } : undefined
+      );
+      const s: any = res.data || {};
+      const updated: SupplierRecord = {
+        id: String(s._id || editing.id),
+        name: s.name || editForm.name,
+        contactPerson: s.contactPerson || editForm.contactPerson,
+        contactInfo: s.contactInfo || s.email || editForm.contactInfo,
+        products: Array.isArray(s.products) ? s.products : products,
+        contractEndDate: s.contractEndDate || editForm.contractEndDate,
+        status: (s.status as SupplierRecord["status"]) || status,
+        email: s.email || editing.email,
+        phone: s.phone || editing.phone,
+        address: s.address || editing.address,
+        contractStartDate: s.contractStartDate || editing.contractStartDate,
+      };
+      setSuppliers((prev) => prev.map((sup) => (sup.id === editing.id ? updated : sup)));
+      setIsEditOpen(false);
+      setEditing(null);
+      toast({ title: "Supplier updated", description: `${updated.name} has been updated.` });
+    } catch (err: any) {
+      console.error("Failed to update supplier", err?.response || err);
+      toast({ title: "Error", description: "Failed to update supplier", variant: "destructive" });
+    }
   };
 
   const handleCancelContract = (id: string) => {
@@ -309,58 +358,27 @@ const SuppliersPage: React.FC = () => {
           ? {
               ...s,
               contractEndDate: todayStr,
-              status: "Cancelled",
+              status: "Cancelled" as SupplierRecord["status"],
             }
           : s
       )
     );
-  };
 
-  const openCreatePo = (supplier: SupplierRecord) => {
-    setPoSupplier(supplier);
-    setPoForm({ description: "", quantity: "", unitPrice: "", notes: "" });
-    setIsCreatePoOpen(true);
-  };
-
-  const handleCreatePo = () => {
-    if (!poSupplier) return;
-
-    const effectiveStatus =
-      poSupplier.status === "Cancelled"
-        ? "Cancelled"
-        : computeStatus(poSupplier.contractEndDate, poSupplier.contractStartDate);
-
-    if (effectiveStatus === "Inactive" || effectiveStatus === "Cancelled") {
-      window.alert("Cannot create a purchase order for an inactive or cancelled supplier.");
-      return;
-    }
-
-    const quantity = parseFloat(poForm.quantity);
-    const unitPrice = parseFloat(poForm.unitPrice);
-    if (!poForm.description || !poForm.quantity || !poForm.unitPrice || isNaN(quantity) || isNaN(unitPrice)) {
-      return;
-    }
-
-    const item: PurchaseOrderItem = {
-      description: poForm.description,
-      quantity,
-      unitPrice,
-    };
-
-    const created = createPurchaseOrder({
-      supplierId: poSupplier.id,
-      supplierName: poSupplier.name,
-      items: [item],
-      notes: poForm.notes || undefined,
-    });
-
-    setIsCreatePoOpen(false);
-    setPoSupplier(null);
-
-    toast({
-      title: "Purchase Order Created",
-      description: `PO ${created.poId} has been saved. You can view it in Purchase History.`,
-    });
+    (async () => {
+      try {
+        const token = localStorage.getItem("token");
+        await api.put(
+          `/lab/suppliers/${id}`,
+          {
+            contractEndDate: todayStr,
+            status: "Cancelled",
+          },
+          token ? { headers: { Authorization: `Bearer ${token}` } } : undefined
+        );
+      } catch (err) {
+        console.error("Failed to cancel supplier contract in backend", err as any);
+      }
+    })();
   };
 
   return (
@@ -522,26 +540,6 @@ const SuppliersPage: React.FC = () => {
                             <Edit2 className="h-3.5 w-3.5" />
                             <span>Edit supplier</span>
                           </DropdownMenuItem>
-                          <DropdownMenuItem
-                            className="flex items-center gap-2 text-xs"
-                            onClick={() => {
-                              window.dispatchEvent(
-                                new CustomEvent("openPurchaseHistoryForSupplier", {
-                                  detail: { supplierId: s.id, supplierName: s.name },
-                                })
-                              );
-                            }}
-                          >
-                            <History className="h-3.5 w-3.5" />
-                            <span>Purchase History</span>
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            className="flex items-center gap-2 text-xs"
-                            onClick={() => openCreatePo(s)}
-                          >
-                            <FileText className="h-3.5 w-3.5" />
-                            <span>Create PO</span>
-                          </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </TableCell>
@@ -579,71 +577,6 @@ const SuppliersPage: React.FC = () => {
           </div>
         </CardContent>
       </Card>
-
-      <Dialog open={isCreatePoOpen} onOpenChange={(open) => {
-        setIsCreatePoOpen(open);
-        if (!open) {
-          setPoSupplier(null);
-        }
-      }}>
-        <DialogContent className="sm:max-w-[520px]">
-          <DialogHeader>
-            <DialogTitle>Create Purchase Order</DialogTitle>
-            <DialogDescription>
-              Create a new purchase order for this supplier. This will be saved to local history.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-2 text-sm">
-            {poSupplier && (
-              <div className="rounded-md bg-gray-50 border px-3 py-2 text-xs text-gray-700 space-y-1">
-                <div className="font-semibold text-gray-900 text-sm">{poSupplier.name}</div>
-                {poSupplier.contactPerson && <div>Contact: {poSupplier.contactPerson}</div>}
-                {poSupplier.email && <div>Email: {poSupplier.email}</div>}
-              </div>
-            )}
-            <div className="space-y-2">
-              <label className="text-xs font-medium text-gray-700">Item description *</label>
-              <Input
-                value={poForm.description}
-                onChange={(e) => setPoForm({ ...poForm, description: e.target.value })}
-                placeholder="e.g. Reagents, Pipette Tips"
-              />
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <label className="text-xs font-medium text-gray-700">Quantity *</label>
-                <Input
-                  value={poForm.quantity}
-                  onChange={(e) => setPoForm({ ...poForm, quantity: e.target.value })}
-                  placeholder="e.g. 10"
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-medium text-gray-700">Unit Price (Rs) *</label>
-                <Input
-                  value={poForm.unitPrice}
-                  onChange={(e) => setPoForm({ ...poForm, unitPrice: e.target.value })}
-                  placeholder="e.g. 450"
-                />
-              </div>
-            </div>
-            <div className="space-y-2">
-              <label className="text-xs font-medium text-gray-700">Notes (optional)</label>
-              <Input
-                value={poForm.notes}
-                onChange={(e) => setPoForm({ ...poForm, notes: e.target.value })}
-                placeholder="Additional instructions or reference"
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIsCreatePoOpen(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleCreatePo}>Save Purchase Order</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
         <DialogContent className="sm:max-w-[720px] max-h-[80vh] overflow-y-auto">

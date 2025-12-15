@@ -3,6 +3,8 @@ import { DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { useToast } from "@/hooks/use-toast";
+import { api } from "@/lib/api";
 
 interface Props {
   itemId: string;
@@ -15,24 +17,27 @@ interface Props {
 const AdjustLooseItemsDialog: React.FC<Props> = ({ itemId, currentStock, unit, onClose, onUpdated }) => {
   const [delta, setDelta] = useState<string>("0");
   const [saving, setSaving] = useState(false);
+  const { toast } = useToast();
 
   const save = async () => {
     setSaving(true);
     try {
-      const token = localStorage.getItem('token');
       const deltaUnits = parseInt(delta) || 0;
       const nextStock = Math.max(0, currentStock + deltaUnits);
       const payload: any = { currentStock: nextStock, looseDelta: deltaUnits };
-      const res = await fetch(`/api/lab/inventory/inventory/${itemId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify(payload)
-      });
-      if (!res.ok) throw new Error('Failed to adjust stock');
+      const token = localStorage.getItem('token');
+
+      await api.put(
+        `/lab/inventory/${itemId}`,
+        payload,
+        token ? { headers: { Authorization: `Bearer ${token}` } } : undefined
+      );
       await onUpdated();
       onClose();
+      toast({ title: "Stock Updated", description: "Loose items adjusted successfully." });
     } catch (e) {
-      alert((e as Error).message);
+      console.error("Failed to adjust loose items stock", e);
+      toast({ title: "Error", description: "Failed to adjust stock", variant: "destructive" });
     } finally {
       setSaving(false);
     }

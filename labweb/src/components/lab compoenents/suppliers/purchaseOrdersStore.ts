@@ -1,3 +1,5 @@
+import { api } from "@/lib/api";
+
 export type PurchaseOrderStatus = "Pending" | "Delivered" | "Cancelled";
 
 export interface PurchaseOrderItem {
@@ -7,7 +9,7 @@ export interface PurchaseOrderItem {
 }
 
 export interface PurchaseOrderRecord {
-  id: string;
+  id: string; // Mongo _id
   poId: string;
   supplierId: string;
   supplierName: string;
@@ -18,11 +20,9 @@ export interface PurchaseOrderRecord {
   notes?: string;
 }
 
-const STORAGE_KEY = "lab_purchase_orders_v1";
-
 function normalizeOrders(raw: any): PurchaseOrderRecord[] {
   if (!Array.isArray(raw)) return [];
-  return raw.map((o: any, idx: number) => {
+  return raw.map((o: any) => {
     const safeItems: PurchaseOrderItem[] = Array.isArray(o?.items)
       ? (o.items as any[]).map((it: any) => ({
           description: String(it?.description ?? "").trim(),
@@ -31,7 +31,7 @@ function normalizeOrders(raw: any): PurchaseOrderRecord[] {
         }))
       : [];
 
-    const id = String(o?.id ?? `PO_${Date.now()}_${idx + 1}`);
+    const id = String(o?._id ?? o?.id ?? "");
     const poId = String(o?.poId ?? "");
     const supplierId = String(o?.supplierId ?? "");
     const supplierName = String(o?.supplierName ?? "");
@@ -58,37 +58,26 @@ function normalizeOrders(raw: any): PurchaseOrderRecord[] {
   });
 }
 
-function loadAll(): PurchaseOrderRecord[] {
+export async function getAllPurchaseOrders(): Promise<PurchaseOrderRecord[]> {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as any;
-    return normalizeOrders(parsed);
-  } catch {
+    const res = await api.get("/lab/purchase-orders");
+    return normalizeOrders(res.data);
+  } catch (err) {
+    console.error("Failed to load purchase orders", err as any);
     return [];
   }
 }
 
-function saveAll(orders: PurchaseOrderRecord[]) {
+export async function getPurchaseOrdersBySupplier(supplierId: string): Promise<PurchaseOrderRecord[]> {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(orders));
-  } catch {
-    // ignore storage errors for now
+    const res = await api.get("/lab/purchase-orders", {
+      params: { supplierId },
+    });
+    return normalizeOrders(res.data);
+  } catch (err) {
+    console.error("Failed to load purchase orders by supplier", err as any);
+    return [];
   }
-}
-
-function generatePoId(existingCount: number): string {
-  const year = new Date().getFullYear();
-  const seq = String(existingCount + 1).padStart(3, "0");
-  return `PO-${year}-${seq}`;
-}
-
-export function getAllPurchaseOrders(): PurchaseOrderRecord[] {
-  return loadAll();
-}
-
-export function getPurchaseOrdersBySupplier(supplierId: string): PurchaseOrderRecord[] {
-  return loadAll().filter((o) => o.supplierId === supplierId);
 }
 
 interface CreatePurchaseOrderInput {
@@ -100,32 +89,26 @@ interface CreatePurchaseOrderInput {
   notes?: string;
 }
 
-export function createPurchaseOrder(input: CreatePurchaseOrderInput): PurchaseOrderRecord {
-  const all = loadAll();
-  const id = `PO_${Date.now()}_${all.length + 1}`;
-  const poId = generatePoId(all.length);
-  const orderDate = input.orderDate || new Date().toISOString().slice(0, 10);
-  const totalAmount = input.items.reduce((sum, it) => sum + it.quantity * it.unitPrice, 0);
-
-  const record: PurchaseOrderRecord = {
-    id,
-    poId,
+export async function createPurchaseOrder(input: CreatePurchaseOrderInput): Promise<PurchaseOrderRecord> {
+  const payload = {
     supplierId: input.supplierId,
     supplierName: input.supplierName,
-    orderDate,
+    orderDate: input.orderDate,
     items: input.items,
-    totalAmount,
-    status: input.status || "Pending",
+    status: input.status,
     notes: input.notes,
   };
 
-  const next = [...all, record];
-  saveAll(next);
+  const res = await api.post("/lab/purchase-orders", payload);
+  const [record] = normalizeOrders([res.data]);
   return record;
 }
 
-export function updatePurchaseOrderStatus(id: string, status: PurchaseOrderStatus) {
-  const all = loadAll();
-  const next = all.map((o) => (o.id === id ? { ...o, status } : o));
-  saveAll(next);
+export async function updatePurchaseOrderStatus(id: string, status: PurchaseOrderStatus): Promise<void> {
+  try {
+    await api.put(`/lab/purchase-orders/${id}`, { status });
+  } catch (err) {
+    console.error("Failed to update purchase order status", err as any);
+    throw err;
+  }
 }

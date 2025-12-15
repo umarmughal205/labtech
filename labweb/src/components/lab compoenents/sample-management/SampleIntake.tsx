@@ -19,6 +19,7 @@ import { Check, Search, Filter, Eye, Edit, ExternalLink, X } from "lucide-react"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { api } from "@/lab lib/api";
+import { addLedgerEntry } from "@/components/lab compoenents/finance/labFinanceStore";
 
 interface SampleIntakeProps {
   onNavigateBack?: () => void;
@@ -258,20 +259,19 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
     setIsSubmittingNewSample(true);
 
     try {
-      const sampleToAdd = {
-        barcode: generateBarcode(),
+      const payload: any = {
         patientName: newSample.patientName,
-        test: newSample.test,
+        // simple pending status; backend normalizes
         status: "pending",
-        assignedAnalyzer: newSample.assignedAnalyzer,
-        collectionTime: getCurrentTime()
+        tests: [],
       };
 
-      // After local add, also refresh from backend (if created through main form)
-      // For now, just close modal; main form handles real submissions.
+      await api.post("/labtech/samples", payload);
+      await loadSamplesFromBackend();
+
       toast({
         title: "Success",
-        description: `Sample ${sampleToAdd.barcode} added successfully`,
+        description: `Sample for ${newSample.patientName} added successfully`,
       });
 
       closeAddSampleModal();
@@ -279,7 +279,7 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
       toast({
         title: "Error",
         description: "Failed to add sample. Please try again.",
-        variant: "destructive"
+        variant: "destructive",
       });
     } finally {
       setIsSubmittingNewSample(false);
@@ -803,22 +803,22 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
       { _id: "inv3", name: "Glucose Reagent", unit: "bottle", currentStock: 6 },
       { _id: "inv4", name: "CRP Reagent", unit: "bottle", currentStock: 14 },
     ];
-    fetch("/api/lab/inventory/inventory", {
-      headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
-      credentials: "include",
-    })
-      .then((r) => r.json())
-      .then((arr) => {
-        if (Array.isArray(arr) && arr.length) {
-          setAvailableInventory(arr);
+
+    (async () => {
+      try {
+        const res = await api.get("/lab/inventory");
+        const arr = Array.isArray(res.data) ? res.data : [];
+        if (arr.length) {
+          setAvailableInventory(arr as any[]);
         } else {
           setAvailableInventory(fallbackInv);
         }
-      })
-      .catch(() => {
+      } catch (err) {
+        console.error("Failed to load inventory for consumables", err as any);
         setAvailableInventory(fallbackInv);
         toast({ title: "Error", description: "Failed to load inventory", variant: "destructive" });
-      });
+      }
+    })();
   }, []);
 
   const handleEnter = (_e: React.KeyboardEvent, _next: React.RefObject<HTMLInputElement>) => {
@@ -914,6 +914,25 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
           throw err;
         }
       }
+
+      // Record finance entry for this sample (income)
+      try {
+        const totalAmount = getTotalAmount();
+        if (totalAmount && Number(totalAmount) > 0 && created?.sampleNumber) {
+          await addLedgerEntry({
+            type: "income",
+            source: "Manual",
+            category: "Lab Bills",
+            description: `Sample ${created.sampleNumber} - ${patientInfo.name}`,
+            amount: Number(totalAmount) || 0,
+            date: new Date().toISOString(),
+            reference: created.sampleNumber,
+          });
+        }
+      } catch (finErr) {
+        console.error("Failed to add finance ledger entry for sample", finErr);
+      }
+
       setSubmittedSampleId(created._id);
       // Reload samples from backend (if available)
       try {

@@ -53,6 +53,36 @@ import {
   FinanceRecord,
 } from "@/hooks/useIpdFinanceApi";
 import { getAllLedgerEntries, LabLedgerEntry } from "@/components/lab compoenents/finance/labFinanceStore";
+import { useToast } from "@/hooks/use-toast";
+
+function getModulePermission(moduleName: string): { view: boolean; edit: boolean; delete: boolean } {
+  try {
+    const roleRaw = typeof window !== 'undefined' ? window.localStorage.getItem('role') : null;
+    const role = String(roleRaw || '').trim().toLowerCase();
+    const isAdmin = new Set(['admin', 'administrator', 'lab supervisor', 'lab-supervisor', 'supervisor']).has(role);
+    if (isAdmin) {
+      return { view: true, edit: true, delete: true };
+    }
+    const raw = typeof window !== 'undefined' ? window.localStorage.getItem('permissions') : null;
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (!Array.isArray(parsed)) {
+      return { view: true, edit: true, delete: true };
+    }
+
+    const wanted = String(moduleName || '').trim().toLowerCase();
+    const found = parsed.find((p: any) => String(p?.name || '').trim().toLowerCase() === wanted);
+    if (!found) {
+      return { view: true, edit: false, delete: false };
+    }
+    return {
+      view: !!found.view,
+      edit: !!found.edit,
+      delete: !!found.delete,
+    };
+  } catch {
+    return { view: true, edit: true, delete: true };
+  }
+}
 
 type LedgerDateRange = "last-30-days" | "last-90-days" | "this-year" | "all";
 type LedgerTxTypeFilter = "all" | "Income" | "Expense";
@@ -96,6 +126,8 @@ const getDateLimit = (range: LedgerDateRange) => {
 };
 
 const FinancialLedger: React.FC = () => {
+  const { toast } = useToast();
+  const modulePerm = getModulePermission('Financial Ledger');
   const { data: summary } = useIpdFinanceSummary();
   const {
     data: recordsData,
@@ -357,6 +389,10 @@ const FinancialLedger: React.FC = () => {
   };
 
   const handleAddEntry = () => {
+    if (!modulePerm.edit) {
+      toast({ title: 'Not allowed', description: 'You only have view permission for Financial Ledger.', variant: 'destructive' });
+      return;
+    }
     if (!newEntry.description || !newEntry.amount) return;
 
     const payload = {
@@ -398,7 +434,16 @@ const FinancialLedger: React.FC = () => {
             <Download className="w-4 h-4 mr-2" />
             Export Ledger
           </Button>
-          <Button onClick={() => setIsAddOpen(true)}>
+          <Button
+            disabled={!modulePerm.edit}
+            onClick={() => {
+              if (!modulePerm.edit) {
+                toast({ title: 'Not allowed', description: 'You only have view permission for Financial Ledger.', variant: 'destructive' });
+                return;
+              }
+              setIsAddOpen(true);
+            }}
+          >
             <Plus className="w-4 h-4 mr-2" />
             Add Manual Entry
           </Button>
@@ -870,7 +915,16 @@ const FinancialLedger: React.FC = () => {
         </CardContent>
       </Card>
 
-      <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
+      <Dialog
+        open={isAddOpen}
+        onOpenChange={(open) => {
+          if (open && !modulePerm.edit) {
+            toast({ title: 'Not allowed', description: 'You only have view permission for Financial Ledger.', variant: 'destructive' });
+            return;
+          }
+          setIsAddOpen(open);
+        }}
+      >
         <DialogContent className="sm:max-w-[480px]">
           <DialogHeader>
             <DialogTitle>Add Manual Entry</DialogTitle>
@@ -967,7 +1021,7 @@ const FinancialLedger: React.FC = () => {
             <Button variant="outline" onClick={() => setIsAddOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={handleAddEntry} disabled={createMutation.isPending}>
+            <Button onClick={handleAddEntry} disabled={createMutation.isPending || !modulePerm.edit}>
               {createMutation.isPending ? "Saving..." : "Save Entry"}
             </Button>
           </DialogFooter>

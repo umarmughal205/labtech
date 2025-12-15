@@ -1,8 +1,10 @@
-import React, { useEffect, useState } from "react";
+import React from "react";
 import { Bell, LogOut, User } from "lucide-react";
 import { SidebarTrigger } from "@/components/lab compoenents/ui/sidebar";
 import { UserRole } from "@/lab types/user";
 import NotificationBell from "@/components/lab compoenents/common/NotificationBell";
+import { useSettings } from "@/contexts/SettingsContext";
+import { useAuth } from "@/lab context/AuthContext";
 
 interface LabTopHeaderProps {
   currentRole: UserRole | null;
@@ -11,69 +13,19 @@ interface LabTopHeaderProps {
 }
 
 const LabTopHeader: React.FC<LabTopHeaderProps> = ({ currentRole, onLogout }) => {
-  const roleLabel = currentRole === "receptionist"
+  const { settings } = useSettings();
+  const { role: authRole, userName } = useAuth();
+
+  const roleLabel = authRole
+    ? String(authRole)
+    : currentRole === "receptionist"
     ? "Receptionist"
     : currentRole === "researcher"
     ? "Researcher"
     : "Lab Supervisor";
 
-  const [logoUrl, setLogoUrl] = useState<string | null>(null);
-  const [labName, setLabName] = useState<string>("MedLab LIS");
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    const loadLogo = () => {
-      const stored = localStorage.getItem("labLogoUrl");
-      setLogoUrl(stored || null);
-    };
-
-    loadLogo();
-
-    const handleLogoChanged = () => {
-      loadLogo();
-    };
-
-    window.addEventListener("labLogoChanged", handleLogoChanged as EventListener);
-    window.addEventListener("storage", handleLogoChanged as EventListener);
-
-    return () => {
-      window.removeEventListener("labLogoChanged", handleLogoChanged as EventListener);
-      window.removeEventListener("storage", handleLogoChanged as EventListener);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    const loadLabName = () => {
-      try {
-        const stored = localStorage.getItem("labSettings");
-        if (stored) {
-          const parsed = JSON.parse(stored) as { labName?: string };
-          setLabName(parsed.labName && parsed.labName.trim() ? parsed.labName : "MedLab LIS");
-        } else {
-          setLabName("MedLab LIS");
-        }
-      } catch {
-        setLabName("MedLab LIS");
-      }
-    };
-
-    loadLabName();
-
-    const handleLabSettingsChanged = () => {
-      loadLabName();
-    };
-
-    window.addEventListener("labSettingsChanged", handleLabSettingsChanged as EventListener);
-    window.addEventListener("storage", handleLabSettingsChanged as EventListener);
-
-    return () => {
-      window.removeEventListener("labSettingsChanged", handleLabSettingsChanged as EventListener);
-      window.removeEventListener("storage", handleLabSettingsChanged as EventListener);
-    };
-  }, []);
+  const logoUrl = settings.labLogoUrl || null;
+  const labName = settings.hospitalName || "MedLab LIS";
 
   return (
     <header className="fixed top-0 left-0 right-0 z-30 h-14 border-b border-blue-800 bg-blue-900 flex items-center justify-between px-4 md:px-6 shadow-sm">
@@ -97,7 +49,7 @@ const LabTopHeader: React.FC<LabTopHeaderProps> = ({ currentRole, onLogout }) =>
 
       <div className="flex items-center gap-4">
         <div className="hidden md:flex flex-col leading-tight">
-          <span className="text-sm font-medium text-white">Dr. John Doe</span>
+          <span className="text-sm font-medium text-white">{userName || 'User'}</span>
           <span className="text-xs text-blue-50">{roleLabel}</span>
         </div>
         <div className="flex items-center gap-2">

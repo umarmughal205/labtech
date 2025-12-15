@@ -1,9 +1,8 @@
 
 import React, { useState, useEffect } from 'react';
-import { Users, FileText, DollarSign, Calendar, TestTube, Clock, AlertTriangle, TrendingUp, Activity } from 'lucide-react';
+import { Users, FileText, DollarSign, Calendar, TestTube, Clock, AlertTriangle, Activity } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
-import { useTokens } from '@/hooks/useApi';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { api } from '@/lib/api';
 
 interface Token {
@@ -38,44 +37,8 @@ const DashboardStats = () => {
     urgentTests: 0,
   });
   
-  // Chart data is also derived from local samples instead of hardcoded demo data.
+  // Chart data is also derived from backend samples instead of hardcoded demo data.
   const [workflowData, setWorkflowData] = useState<any[]>([]);
-  const [analyzerData, setAnalyzerData] = useState<any[]>([]);
-  const [qcTrendsData, setQcTrendsData] = useState<any[]>([]);
-
-  // Fetch today's tokens from backend
-  const todayStr = new Date().toLocaleDateString('en-CA');
-  const { data, refetch } = useTokens(todayStr);
-  const tokens = React.useMemo(() => (Array.isArray(data) ? data : []), [data]);
-
-  // Recompute stats whenever tokens data changes (avoid re-creating timers)
-  useEffect(() => {
-    calculateRealTimeStats(tokens);
-  }, [tokens]);
-
-  // Set up periodic refetch and event-driven refetch once
-  useEffect(() => {
-    const interval = setInterval(() => refetch(), 30000);
-    const onGenerated = () => refetch();
-    const onRevenueChanged = () => refetch();
-    window.addEventListener('tokenGenerated', onGenerated);
-    window.addEventListener('revenueChanged', onRevenueChanged);
-    return () => {
-      clearInterval(interval);
-      window.removeEventListener('tokenGenerated', onGenerated);
-      window.removeEventListener('revenueChanged', onRevenueChanged);
-    };
-  }, [refetch]);
-
-  useEffect(() => {
-    const onSamples = () => calculateRealTimeStats(tokens);
-    window.addEventListener('sampleSubmitted', onSamples);
-    window.addEventListener('samplesChanged', onSamples);
-    return () => {
-      window.removeEventListener('sampleSubmitted', onSamples);
-      window.removeEventListener('samplesChanged', onSamples);
-    };
-  }, [tokens]);
 
   // Derive lab statistics and chart data from backend samples so dashboard follows the
   // same flows as SamplesPage / Barcodes, but is database-driven.
@@ -91,19 +54,16 @@ const DashboardStats = () => {
       samples = [];
     }
     const now = new Date();
-    const todayKey = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
-
-    const isToday = (dt: any) => {
+    const todayKeyUtc = now.toISOString().slice(0, 10); // YYYY-MM-DD in UTC
+    const isTodayCreated = (dt: any) => {
       const d = dt ? new Date(dt) : null;
       if (!d || isNaN(d.getTime())) return false;
-      return (
-        d.getFullYear() === now.getFullYear() &&
-        d.getMonth() === now.getMonth() &&
-        d.getDate() === now.getDate()
-      );
+      const key = d.toISOString().slice(0, 10);
+      return key === todayKeyUtc;
     };
 
-    const samplesToday = samples.filter(s => isToday(s.collectionTime || s.createdAt));
+    // "Total Samples Today" should count samples intake today (createdAt date)
+    const samplesToday = samples.filter(s => isTodayCreated(s.createdAt));
 
     const totalSamplesToday = samplesToday.length;
     const inProcessSamples = samplesToday.filter(s => {
@@ -145,36 +105,22 @@ const DashboardStats = () => {
       .map(k => ({ time: k, samples: workflowMap[k] }));
     setWorkflowData(workflowArr);
 
-    // Analyzer performance: count samples per analyzer
-    const analyzerMap: Record<string, number> = {};
-    samplesToday.forEach(s => {
-      const name = s.assignedAnalyzer || 'Unknown';
-      analyzerMap[name] = (analyzerMap[name] || 0) + 1;
-    });
-    const analyzerArr = Object.keys(analyzerMap).map(name => ({ name, performance: analyzerMap[name] }));
-    setAnalyzerData(analyzerArr);
+    // Derive patient & revenue stats purely from backend samples
+    const todayPatients = samplesToday.length;
+    const todayRevenue = samplesToday.reduce((sum: number, s: any) => {
+      const amount = typeof s.totalAmount === 'number' ? s.totalAmount : 0;
+      return sum + amount;
+    }, 0);
+    const totalTokensGeneratedToday = todayPatients;
+    const appointments = todayPatients;
 
-    // QC trends placeholder derived from completed samples per day over last 5 days
-    const qcMap: Record<string, { label: string; count: number }> = {};
-    for (let i = 4; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
-      const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
-      const label = d.toLocaleDateString(undefined, { weekday: 'short' });
-      qcMap[key] = { label, count: 0 };
-    }
-    samples.forEach(s => {
-      const d = s.collectionTime ? new Date(s.collectionTime) : (s.createdAt ? new Date(s.createdAt) : null);
-      if (!d || isNaN(d.getTime())) return;
-      const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
-      const status = String(s.status || '').toLowerCase();
-      if (!status.includes('completed') || !qcMap[key]) return;
-      qcMap[key].count += 1;
+    setStats({
+      todayPatients,
+      tokensGenerated: totalTokensGeneratedToday,
+      todayRevenue,
+      appointments,
     });
-    const qcArr = Object.values(qcMap).map(entry => ({
-      day: entry.label,
-      value: entry.count === 0 ? 0 : 98 + Math.min(2, entry.count) * 0.5,
-    }));
-    setQcTrendsData(qcArr);
+
   };
 
   // Initial load and refresh when samples change elsewhere in the app
@@ -188,59 +134,6 @@ const DashboardStats = () => {
       window.removeEventListener('samplesChanged', handler);
     };
   }, []);
-
-  const calculateRealTimeStats = async (tokensArg?: any[]) => {
-    let todaysTokens: Token[] = Array.isArray(tokensArg) ? (tokensArg as Token[]) : [];
-    if (!todaysTokens || todaysTokens.length === 0) {
-      try {
-        const lsTokens = JSON.parse(localStorage.getItem('tokens') || '[]');
-        const today = new Date().toISOString().slice(0, 10);
-        todaysTokens = lsTokens.filter((t: any) => (t?.dateTime || '').slice(0,10) === today);
-      } catch {}
-    }
-
-    const tokensRevenue = todaysTokens.reduce((sum: number, token: any) => {
-      const isReturned = String(token?.status || '').toLowerCase() === 'returned';
-      const refundAmount = Number(token?.refundAmount || 0) || 0;
-      const base = Number(token?.finalFee || 0) || 0;
-      if (isReturned) return sum;
-      return sum + Math.max(0, base - refundAmount);
-    }, 0);
-
-    let samples: any[] = [];
-    try {
-      const token = localStorage.getItem('token');
-      const { data } = await api.get('/labtech/samples', {
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      });
-      samples = Array.isArray(data) ? data : [];
-    } catch {
-      samples = [];
-    }
-
-    const now = new Date();
-    const isToday = (dt: any) => {
-      const d = dt ? new Date(dt) : null;
-      if (!d || isNaN(d.getTime())) return false;
-      return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
-    };
-    const samplesToday = samples.filter(s => isToday(s.collectionTime || s.createdAt));
-    const samplesRevenue = samplesToday.reduce((sum: number, s: any) => {
-      const line = typeof s.totalPrice === 'number' ? s.totalPrice : (Array.isArray(s.tests) ? s.tests.reduce((acc: number, t: any) => acc + (Number(t?.price) || 0), 0) : 0);
-      return sum + (Number(line) || 0);
-    }, 0);
-    const todayRevenue = todaysTokens.length > 0 ? tokensRevenue : samplesRevenue;
-    const todayPatients = todaysTokens.length > 0 ? todaysTokens.length : samplesToday.length;
-    const totalTokensGeneratedToday = todaysTokens.length > 0 ? todaysTokens.length : samplesToday.length;
-    const appointments = todaysTokens.length > 0 ? todaysTokens.length : samplesToday.length;
-
-    setStats({
-      todayPatients,
-      tokensGenerated: totalTokensGeneratedToday,
-      todayRevenue,
-      appointments
-    });
-  };
 
   const statsData = [
     {
@@ -295,7 +188,7 @@ const DashboardStats = () => {
       titleClass: 'text-blue-700',
       valueClass: 'text-blue-900',
       iconWrap: 'bg-blue-100 text-blue-600',
-      description: 'Samples processed today'
+      description: 'Samples collected today'
     },
     {
       title: 'In-Process Samples',
@@ -380,7 +273,7 @@ const DashboardStats = () => {
       {/* Charts Section */}
       <div>
         <h2 className="text-lg font-semibold text-gray-800 mb-4">Analytics & Performance</h2>
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-1 gap-6">
           {/* Sample Workflow Chart */}
           <Card>
             <CardHeader>
@@ -392,7 +285,13 @@ const DashboardStats = () => {
             <CardContent>
               <div className="h-64">
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={workflowData}>
+                  <LineChart data={workflowData.length > 0 ? workflowData : [
+                    { time: '08:00', samples: 0 },
+                    { time: '10:00', samples: 1 },
+                    { time: '12:00', samples: 0 },
+                    { time: '14:00', samples: 1 },
+                    { time: '16:00', samples: 0 },
+                  ]}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                     <XAxis 
                       dataKey="time" 
@@ -427,100 +326,9 @@ const DashboardStats = () => {
             </CardContent>
           </Card>
 
-          {/* Analyzer Performance Chart */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <TrendingUp className="w-5 h-5 text-green-500" />
-                Analyzer Performance
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="h-64">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={analyzerData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis 
-                      dataKey="name" 
-                      axisLine={false}
-                      tickLine={false}
-                      tick={{ fontSize: 10, fill: '#666' }}
-                      angle={-45}
-                      textAnchor="end"
-                      height={60}
-                    />
-                    <YAxis 
-                      axisLine={false}
-                      tickLine={false}
-                      tick={{ fontSize: 12, fill: '#666' }}
-                    />
-                    <Tooltip 
-                      contentStyle={{
-                        backgroundColor: '#fff',
-                        border: '1px solid #e5e7eb',
-                        borderRadius: '6px',
-                        boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
-                      }}
-                    />
-                    <Bar 
-                      dataKey="performance" 
-                      fill="#3b82f6"
-                      radius={[4, 4, 0, 0]}
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </CardContent>
-          </Card>
         </div>
       </div>
 
-      {/* QC Trends Chart */}
-      <div>
-        <Card>
-          <CardHeader>
-            <CardTitle>QC Trends (This Week)</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={qcTrendsData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                  <XAxis 
-                    dataKey="day" 
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fontSize: 12, fill: '#666' }}
-                  />
-                  <YAxis 
-                    domain={[97, 100]}
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fontSize: 12, fill: '#666' }}
-                  />
-                  <Tooltip 
-                    contentStyle={{
-                      backgroundColor: '#fff',
-                      border: '1px solid #e5e7eb',
-                      borderRadius: '6px',
-                      boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
-                    }}
-                    formatter={(value) => [`${value}%`, 'QC Value']}
-                  />
-                  <Line 
-                    type="monotone" 
-                    dataKey="value" 
-                    stroke="#10b981" 
-                    strokeWidth={3}
-                    dot={{ fill: '#10b981', strokeWidth: 2, r: 5 }}
-                    activeDot={{ r: 7, fill: '#10b981' }}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
     </div>
   );
 };

@@ -6,8 +6,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { TestType } from "@/lab types/sample";
 import { useToast } from "@/hooks/use-toast";
-import { Search, ArrowLeft } from "lucide-react";
-import { printSampleSlip } from "../../../utils/printSample";
+import { Search, ArrowLeft, Clock, ChevronDown } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { api } from "@/lab lib/api";
 
 interface SampleTrackingProps {
@@ -21,7 +27,11 @@ export interface BackendSample {
   tests: TestType[];
   status: "collected" | "processing" | "completed";
   priority: "normal" | "high" | "urgent";
-  receivedAt: string;
+  results?: any[];
+  resultsSubmittedAt?: string;
+  submittedAt?: string;
+  // Timestamps come directly from backend document
+  receivedAt?: string;
   processedAt?: string;
   completedAt?: string;
   notes?: string;
@@ -32,6 +42,7 @@ export interface BackendSample {
   patientCnic?: string;
   guardianName?: string;
   fatherName?: string;
+  gender?: string;
   token?: string | number;
   tokenNo?: string | number;
   createdAt?: string;
@@ -43,7 +54,8 @@ const SampleTrackingClean = ({ onNavigateBack }: SampleTrackingProps) => {
   const [samples, setSamples] = useState<BackendSample[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [priorityFilter, setPriorityFilter] = useState<'all' | 'normal' | 'urgent'>('all');
+  const [trackedSample, setTrackedSample] = useState<BackendSample | null>(null);
 
   // Load samples from backend API
   const loadSamples = async () => {
@@ -56,7 +68,6 @@ const SampleTrackingClean = ({ onNavigateBack }: SampleTrackingProps) => {
 
       const mapped: BackendSample[] = arr.map((s: any) => {
         const id = s._id || s.sampleNumber || "";
-        const created = s.createdAt || s.receivedAt || new Date().toISOString();
         const statusRaw = String(s.status || "").toLowerCase();
         const status: BackendSample["status"] =
           statusRaw.includes("complet")
@@ -82,7 +93,7 @@ const SampleTrackingClean = ({ onNavigateBack }: SampleTrackingProps) => {
           tests,
           status,
           priority,
-          receivedAt: String(created),
+          receivedAt: s.receivedAt || s.createdAt,
           processedAt: s.processedAt,
           completedAt: s.completedAt,
           notes: s.notes,
@@ -92,6 +103,7 @@ const SampleTrackingClean = ({ onNavigateBack }: SampleTrackingProps) => {
           patientCnic: s.cnic,
           guardianName: s.guardianName,
           fatherName: s.guardianName,
+          gender: s.gender,
           token: s.sampleNumber,
           tokenNo: s.sampleNumber,
           createdAt: s.createdAt,
@@ -107,44 +119,30 @@ const SampleTrackingClean = ({ onNavigateBack }: SampleTrackingProps) => {
     }
   };
 
-  const deleteSample = async (sample: BackendSample) => {
-    if (!confirm(`Delete sample ${sample._id}? This cannot be undone.`)) return;
-    setUpdatingId(sample._id);
+  const handleTrackSampleRow = async (sample: BackendSample) => {
+    setTrackedSample(sample);
     try {
       const token = localStorage.getItem("token");
+      const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
+      const id = String(sample._id || (sample as any).tokenNo || (sample as any).token || '');
+      if (!id) return;
 
-      // Optimistic UI update
-      setSamples((prev) => prev.filter((s) => s._id !== sample._id));
-
-      // Backend delete with fallback id
-      try {
-        await api.delete(`/labtech/samples/${sample._id}`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      const res = await api.get(`/labtech/samples/${id}/test-result`, { headers });
+      const tr = (res?.data || null) as any;
+      if (tr && Array.isArray(tr.results)) {
+        setTrackedSample((prev) => {
+          if (!prev) return prev;
+          if (String(prev._id) !== String(sample._id)) return prev;
+          return {
+            ...prev,
+            results: tr.results,
+            resultsSubmittedAt: tr.resultsSubmittedAt || tr.submittedAt || tr.updatedAt,
+            submittedAt: tr.submittedAt || tr.updatedAt,
+          } as any;
         });
-      } catch (err: any) {
-        if (err?.response?.status === 404) {
-          const altId = (sample as any).sampleNumber || (sample as any).barcode;
-          if (altId && String(altId) !== String(sample._id)) {
-            await api.delete(`/labtech/samples/${altId}`, {
-              headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-            });
-          } else {
-            throw err;
-          }
-        } else {
-          throw err;
-        }
       }
-
-      try {
-        window.dispatchEvent(new Event('samplesChanged'));
-      } catch {}
-
-      toast({ title: 'Deleted', description: `Sample ${sample._id} deleted` });
-    } catch {
-      toast({ title: 'Error', description: 'Failed to delete sample', variant: 'destructive' });
-    } finally {
-      setUpdatingId(null);
+    } catch (err) {
+      // ignore; timeline will just not show report-created as active
     }
   };
 
@@ -159,67 +157,12 @@ const SampleTrackingClean = ({ onNavigateBack }: SampleTrackingProps) => {
     };
   }, []);
 
-  const updateSampleStatus = async (sample: BackendSample, newStatus: BackendSample["status"]) => {
-    setUpdatingId(sample._id);
-    try {
-      const nowIso = new Date().toISOString();
-
-      // Optimistic UI update
-      setSamples((current) =>
-        current.map((s) =>
-          s._id !== sample._id
-            ? s
-            : {
-                ...s,
-                status: newStatus,
-                processedAt: newStatus === 'processing' && !s.processedAt ? nowIso : s.processedAt,
-                completedAt: newStatus === 'completed' ? nowIso : s.completedAt,
-              }
-        )
-      );
-
-      // Map frontend status to backend status string
-      const backendStatus =
-        newStatus === 'collected' ? 'received' : newStatus; // processing/completed pass through
-
-      const token = localStorage.getItem('token');
-      try {
-        await api.patch(`/labtech/samples/${sample._id}`, { status: backendStatus }, {
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        });
-      } catch (err: any) {
-        if (err?.response?.status === 404) {
-          const altId = (sample as any).sampleNumber || (sample as any).barcode;
-          if (altId && String(altId) !== String(sample._id)) {
-            await api.patch(`/labtech/samples/${altId}`, { status: backendStatus }, {
-              headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-            });
-          } else {
-            throw err;
-          }
-        } else {
-          throw err;
-        }
-      }
-
-      try {
-        window.dispatchEvent(new Event('samplesChanged'));
-      } catch {}
-
-      toast({ title: 'Success', description: `Sample ${sample._id} updated to ${newStatus}` });
-    } catch {
-      toast({ title: 'Error', description: 'Failed to update sample', variant: 'destructive' });
-    } finally {
-      setUpdatingId(null);
-    }
-  };
-
   const filtered = samples.filter((s) => {
     const search = searchTerm.toLowerCase();
     const token = (s as any).tokenNo || (s as any).token || '';
     const cnic = (s as any).cnic || (s as any).patientCnic || '';
     const phone = (s as any).phone || (s as any).patientPhone || '';
-    const father = (s as any).fatherName || (s as any).guardianName || '';
+    const priority = String((s as any).priority || '').toLowerCase();
     const matches =
       (s._id || '').toLowerCase().includes(search) ||
       (s.patientName || '').toLowerCase().includes(search) ||
@@ -227,49 +170,24 @@ const SampleTrackingClean = ({ onNavigateBack }: SampleTrackingProps) => {
       String(token).toLowerCase().includes(search) ||
       String(cnic).toLowerCase().includes(search) ||
       String(phone).toLowerCase().includes(search) ||
-      (father || '').toLowerCase().includes(search) ||
+      priority.includes(search) ||
       s.tests.some((t) => (t.name || '').toLowerCase().includes(search));
     const statusMatch = statusFilter === 'all' || s.status === statusFilter;
-    return matches && statusMatch;
+    const priNorm = priority === 'urgent' ? 'urgent' : 'normal';
+    const priorityMatch = priorityFilter === 'all' || priNorm === priorityFilter;
+    return matches && statusMatch && priorityMatch;
   });
-
-  const handlePrintToken = (s: BackendSample) => {
-    try {
-      const token = (s as any).tokenNo || (s as any).token || s._id;
-      const cnic = (s as any).cnic || (s as any).patientCnic || '';
-      const phone = (s as any).phone || (s as any).patientPhone || '';
-      const guardianName = (s as any).fatherName || (s as any).guardianName || '';
-      const tests = (s.tests || []).map(t => ({ name: (t as any).name || '', price: Number((t as any).price || 0) }));
-      const totalAmount = tests.reduce((sum, t) => sum + (Number(t.price) || 0), 0);
-      printSampleSlip({
-        sampleNumber: token,
-        dateTime: (s as any).createdAt || s.receivedAt,
-        patientName: s.patientName,
-        guardianRelation: (s as any).guardianRelation || undefined,
-        guardianName: guardianName || undefined,
-        cnic,
-        phone,
-        age: (s as any).age || '',
-        gender: (s as any).gender || '',
-        address: (s as any).address || '',
-        tests,
-        totalAmount,
-      }, { title: `Sample_${token}` });
-    } catch {
-      toast({ title: 'Print Failed', description: 'Unable to render token slip for this row.', variant: 'destructive' });
-    }
-  };
 
   const statusColor = (status: BackendSample["status"]) => {
     switch (status) {
       case "collected":
-        return "bg-blue-100 text-blue-800";
+        return "bg-blue-600 text-white";
       case "processing":
-        return "bg-yellow-100 text-yellow-800";
+        return "bg-yellow-600 text-white";
       case "completed":
-        return "bg-green-100 text-green-800";
+        return "bg-green-600 text-white";
       default:
-        return "bg-gray-100 text-gray-800";
+        return "bg-gray-600 text-white";
     }
   };
 
@@ -290,22 +208,32 @@ const SampleTrackingClean = ({ onNavigateBack }: SampleTrackingProps) => {
             className="pl-9 h-11"
           />
         </div>
-        <div className="flex gap-2">
-          {[
-            { key: "all", label: "All" },
-            { key: "collected", label: "Collected" },
-            { key: "processing", label: "Processing" },
-            { key: "completed", label: "Completed" },
-          ].map((tab) => (
-            <Button
-              key={tab.key}
-              size="sm"
-              variant={statusFilter === tab.key ? "default" : "outline"}
-              onClick={() => setStatusFilter(tab.key)}
+        <div className="flex gap-2 flex-wrap justify-end">
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-600">Priority</span>
+            <select
+              value={priorityFilter}
+              onChange={(e) => setPriorityFilter(e.target.value as any)}
+              className="h-9 rounded-md border border-gray-300 bg-white pl-2 pr-8 text-sm"
             >
-              {tab.label}
-            </Button>
-          ))}
+              <option value="all">All</option>
+              <option value="normal">Normal</option>
+              <option value="urgent">Urgent</option>
+            </select>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-600">Status</span>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="h-9 rounded-md border border-gray-300 bg-white pl-2 pr-8 text-sm"
+            >
+              <option value="all">All</option>
+              <option value="collected">Collected</option>
+              <option value="processing">Processing</option>
+              <option value="completed">Completed</option>
+            </select>
+          </div>
         </div>
       </div>
 
@@ -315,13 +243,13 @@ const SampleTrackingClean = ({ onNavigateBack }: SampleTrackingProps) => {
             <table className="min-w-full">
               <thead>
                 <tr className="bg-gray-50 text-left text-sm text-gray-600">
-                  <th className="px-3 py-2 border-b">Date</th>
+                  <th className="px-3 py-2 border-b">Sample ID</th>
                   <th className="px-3 py-2 border-b">Patient</th>
-                  <th className="px-3 py-2 border-b">Token No</th>
                   <th className="px-3 py-2 border-b">Test(s)</th>
                   <th className="px-3 py-2 border-b">CNIC</th>
-                  <th className="px-3 py-2 border-b">Father Name</th>
                   <th className="px-3 py-2 border-b">Phone</th>
+                  <th className="px-3 py-2 border-b">Priority</th>
+                  <th className="px-3 py-2 border-b">Date</th>
                   <th className="px-3 py-2 border-b">Status</th>
                   <th className="px-3 py-2 border-b text-right">Actions</th>
                 </tr>
@@ -331,19 +259,53 @@ const SampleTrackingClean = ({ onNavigateBack }: SampleTrackingProps) => {
                   const token = (s as any).tokenNo || (s as any).token || s._id || '-';
                   const cnic = (s as any).cnic || (s as any).patientCnic || '-';
                   const phone = (s as any).phone || (s as any).patientPhone || '-';
-                  const father = (s as any).fatherName || (s as any).guardianName || '-';
+                  const priority = String((s as any).priority || 'normal');
                   return (
                     <tr key={s._id} className="hover:bg-gray-50">
-                      <td className="px-3 py-2 border-b whitespace-nowrap">{(() => { const d = (s as any).createdAt || (s as any).updatedAt || s.receivedAt; try { return d ? new Date(d).toLocaleString() : '-'; } catch { return '-'; } })()}</td>
+                      <td className="px-3 py-2 border-b">{token}</td>
                       <td className="px-3 py-2 border-b">
                         <div className="font-medium">{s.patientName || 'Unknown'}</div>
                         <div className="text-xs text-gray-500">{s.patientId || ''}</div>
                       </td>
-                      <td className="px-3 py-2 border-b">{token}</td>
-                      <td className="px-3 py-2 border-b">{s.tests.map(t => t.name).join(', ')}</td>
+                      <td className="px-3 py-2 border-b">
+                        {(() => {
+                          const names = Array.from(
+                            new Set(
+                              (Array.isArray(s.tests) ? s.tests : [])
+                                .map((t: any) => String((t && (t.name || t.test)) || t || '').trim())
+                                .filter(Boolean)
+                                .map((n) => n.toLowerCase())
+                            )
+                          ).map((lower) =>
+                            (Array.isArray(s.tests) ? s.tests : [])
+                              .map((t: any) => String((t && (t.name || t.test)) || t || '').trim())
+                              .find((n: string) => n && n.toLowerCase() === lower) || lower
+                          );
+                          const list = names.filter(Boolean);
+                          if (list.length === 0) return <span>-</span>;
+                          return (
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button variant="outline" size="sm" className="h-8 px-2">
+                                  {list.length} {list.length === 1 ? 'test' : 'tests'}
+                                  <ChevronDown className="ml-2 h-4 w-4" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="start" className="max-h-64 overflow-auto">
+                                {list.map((n, idx) => (
+                                  <DropdownMenuItem key={`${n}-${idx}`} onSelect={(e) => e.preventDefault()}>
+                                    {n}
+                                  </DropdownMenuItem>
+                                ))}
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          );
+                        })()}
+                      </td>
                       <td className="px-3 py-2 border-b">{cnic}</td>
-                      <td className="px-3 py-2 border-b">{father}</td>
                       <td className="px-3 py-2 border-b">{phone}</td>
+                      <td className="px-3 py-2 border-b capitalize">{priority || 'normal'}</td>
+                      <td className="px-3 py-2 border-b whitespace-nowrap">{(() => { const d = (s as any).createdAt || (s as any).updatedAt || s.receivedAt; try { return d ? new Date(d).toLocaleString() : '-'; } catch { return '-'; } })()}</td>
                       <td className="px-3 py-2 border-b">
                         <Badge className={statusColor(s.status)}>{s.status}</Badge>
                       </td>
@@ -352,18 +314,9 @@ const SampleTrackingClean = ({ onNavigateBack }: SampleTrackingProps) => {
                           <Button
                             size="sm"
                             className="h-8 px-3 bg-blue-900 text-white hover:bg-blue-700"
-                            onClick={() => handlePrintToken(s)}
+                            onClick={() => handleTrackSampleRow(s)}
                           >
-                            Print
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-8 px-3 text-red-600 border-red-300 hover:bg-red-50"
-                            disabled={updatingId === s._id}
-                            onClick={() => deleteSample(s as any)}
-                          >
-                            {updatingId === s._id ? 'Deleting...' : 'Delete'}
+                            Track
                           </Button>
                         </div>
                       </td>
@@ -384,6 +337,184 @@ const SampleTrackingClean = ({ onNavigateBack }: SampleTrackingProps) => {
           </div>
         </CardContent>
       </Card>
+
+      {/* Track Sample Dialog */}
+      <Dialog open={!!trackedSample} onOpenChange={(open) => { if (!open) setTrackedSample(null); }}>
+        <DialogContent className="w-full max-w-3xl max-h-[90vh] overflow-y-auto sm:rounded-2xl p-4 sm:p-6">
+          {trackedSample && (
+            <div className="space-y-6">
+              {/* Header: Sample ID */}
+              <div>
+                <p className="text-xs text-gray-500 uppercase tracking-wide mb-1">
+                  Sample ID
+                </p>
+                <p className="font-mono text-sm font-semibold">
+                  {(trackedSample as any).tokenNo || (trackedSample as any).token || trackedSample._id}
+                </p>
+              </div>
+
+              {/* Sample Information Card */}
+              <Card className="border bg-gray-50/60">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm font-bold text-gray-800">Sample Information</CardTitle>
+                </CardHeader>
+                <CardContent className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 text-sm">
+                  <div>
+                    <p className="text-xs text-gray-500 mb-1">Sample ID</p>
+                    <p className="font-mono text-gray-900">
+                      {(trackedSample as any).tokenNo || (trackedSample as any).token || trackedSample._id}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500 mb-1">Patient</p>
+                    <p className="font-medium text-gray-900">{trackedSample.patientName || 'Unknown'}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500 mb-1">Test(s)</p>
+                    <p className="font-medium text-gray-900">
+                      {trackedSample.tests && trackedSample.tests.length
+                        ? trackedSample.tests.map(t => t.name).join(', ')
+                        : 'N/A'}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500 mb-1">CNIC</p>
+                    <p className="text-gray-900">{(trackedSample as any).cnic || (trackedSample as any).patientCnic || '-'}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500 mb-1">Phone</p>
+                    <p className="text-gray-900">{(trackedSample as any).phone || (trackedSample as any).patientPhone || '-'}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500 mb-1">Guardian</p>
+                    <p className="text-gray-900">{(trackedSample as any).fatherName || (trackedSample as any).guardianName || '-'}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500 mb-1">Gender</p>
+                    <p className="text-gray-900 capitalize">{(trackedSample as any).gender || '-'}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500 mb-1">Status</p>
+                    <Badge className={statusColor(trackedSample.status)}>{trackedSample.status}</Badge>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500 mb-1">Priority</p>
+                    <p className="text-gray-900 capitalize">{trackedSample.priority}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500 mb-1">Collected On</p>
+                    <p className="text-gray-900">
+                      {(() => {
+                        const d = (trackedSample as any).createdAt || trackedSample.receivedAt;
+                        try {
+                          return d ? new Date(d).toLocaleString() : '-';
+                        } catch {
+                          return '-';
+                        }
+                      })()}
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Timeline Card */}
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm font-bold text-gray-800">Sample Lifecycle Timeline</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-4">
+                    {[
+                      {
+                        key: 'collected',
+                        label: 'Sample Collected',
+                        time: trackedSample.receivedAt,
+                        active: !!trackedSample.receivedAt,
+                      },
+                      {
+                        key: 'barcode',
+                        label: 'Barcode Scanned',
+                        time: trackedSample.receivedAt,
+                        active: !!trackedSample.receivedAt,
+                      },
+                      {
+                        key: 'processing',
+                        label: 'Sample Processing',
+                        time: trackedSample.processedAt,
+                        active: !!trackedSample.processedAt || trackedSample.status === 'processing' || trackedSample.status === 'completed',
+                      },
+                      {
+                        key: 'processing-completed',
+                        label: 'Sample processing Completed',
+                        subtitle: 'Ready for result entry.',
+                        time: trackedSample.processedAt,
+                        active: trackedSample.status === 'completed',
+                      },
+                      {
+                        key: 'report-created',
+                        label: 'Report Created',
+                        time: (() => {
+                          const hasResults = Array.isArray((trackedSample as any).results) && (trackedSample as any).results.length > 0;
+                          if (!hasResults) return null;
+                          return (
+                            (trackedSample as any).reportCreatedAt ||
+                            (trackedSample as any).reportGeneratedAt ||
+                            (trackedSample as any).reportCreatedOn ||
+                            (trackedSample as any).resultsSubmittedAt ||
+                            (trackedSample as any).submittedAt ||
+                            trackedSample.completedAt ||
+                            null
+                          );
+                        })(),
+                        active: (() => {
+                          const hasResults = Array.isArray((trackedSample as any).results) && (trackedSample as any).results.length > 0;
+                          return hasResults;
+                        })(),
+                      },
+                    ].map((step, index, arr) => {
+                      const dt = step.time ? new Date(step.time) : null;
+                      const timeLabel = dt && !isNaN(dt.getTime())
+                        ? dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                        : '--:--';
+                      const isLast = index === arr.length - 1;
+                      const circleClass = step.active
+                        ? 'bg-blue-600 border-blue-600 shadow-sm'
+                        : 'bg-white border-gray-300';
+                      const lineClass = step.active ? 'bg-blue-200' : 'bg-gray-200';
+                      const textClass = step.active ? 'text-gray-900' : 'text-gray-500';
+
+                      return (
+                        <div key={step.key} className="flex items-start gap-3">
+                          <div className="flex flex-col items-center pt-1">
+                            <div className={`w-5 h-5 rounded-full border-2 ${circleClass}`}></div>
+                            {!isLast && (
+                              <div className={`w-px h-10 mt-1 ${lineClass}`}></div>
+                            )}
+                          </div>
+                          <div className="flex-1 flex items-center justify-between">
+                            <div>
+                              <p className={`text-sm font-medium ${textClass}`}>{step.label}</p>
+                              {(step as any).subtitle && (
+                                <p className={`text-xs ${step.active ? 'text-gray-600' : 'text-gray-400'}`}>
+                                  {(step as any).subtitle}
+                                </p>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-1 text-xs text-gray-500">
+                              <Clock className="w-3 h-3" />
+                              <span>{timeLabel}</span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

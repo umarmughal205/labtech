@@ -24,13 +24,15 @@ export interface InventoryItemRow {
 interface Props {
   rows: InventoryItemRow[];
   filter: "all" | "low" | "expiring" | "out";
+  canEdit?: boolean;
+  canDelete?: boolean;
   onEdit: (row: InventoryItemRow) => void;
   onDelete: (row: InventoryItemRow) => void;
   onUpdateStock: (row: InventoryItemRow) => void;
   onAdjustUnits: (row: InventoryItemRow) => void;
 }
 
-const InventoryTable: React.FC<Props> = ({ rows, filter, onEdit, onDelete, onUpdateStock, onAdjustUnits }) => {
+const InventoryTable: React.FC<Props> = ({ rows, filter, canEdit = true, canDelete = true, onEdit, onDelete, onUpdateStock, onAdjustUnits }) => {
   const [sortKey, setSortKey] = useState<keyof InventoryItemRow | "totalValue">("name");
   const [asc, setAsc] = useState(true);
 
@@ -120,6 +122,7 @@ const InventoryTable: React.FC<Props> = ({ rows, filter, onEdit, onDelete, onUpd
                       size="icon"
                       variant="ghost"
                       className="h-8 w-8 text-slate-800 hover:text-slate-900 hover:bg-slate-100"
+                      disabled={!canEdit}
                       onClick={() => onEdit(r)}
                     >
                       <Edit className="w-4 h-4" />
@@ -128,6 +131,7 @@ const InventoryTable: React.FC<Props> = ({ rows, filter, onEdit, onDelete, onUpd
                       size="icon"
                       variant="ghost"
                       className="h-8 w-8 text-red-600 hover:text-red-700 hover:bg-red-50"
+                      disabled={!canDelete}
                       onClick={() => onDelete(r)}
                     >
                       <Trash2 className="w-4 h-4" />

@@ -19,7 +19,14 @@ function verifyToken(req, res, next) {
 }
 
 function requireAdmin(req, res, next) {
-  if (!req.user || req.user.role !== 'admin') {
+  const role = req.user && req.user.role ? String(req.user.role).trim().toLowerCase() : '';
+  const allowed = new Set([
+    'admin',
+    'lab supervisor',
+    'lab-supervisor',
+    'supervisor',
+  ]);
+  if (!role || !allowed.has(role)) {
     return res.status(403).json({ success: false, message: 'Admin access required' });
   }
   next();

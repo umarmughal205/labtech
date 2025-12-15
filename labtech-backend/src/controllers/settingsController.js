@@ -32,7 +32,30 @@ async function updateSettings(req, res) {
   }
 }
 
+// PUT /api/settings/report-template - update only the reportTemplate field
+async function updateReportTemplate(req, res) {
+  try {
+    const template = req.body?.reportTemplate ?? null;
+
+    const settings = await Settings.findOneAndUpdate(
+      {},
+      { reportTemplate: template },
+      {
+        new: true,
+        upsert: true,
+        runValidators: true,
+      }
+    );
+
+    res.json({ reportTemplate: settings.reportTemplate });
+  } catch (err) {
+    console.error('Error updating report template', err);
+    res.status(400).json({ message: 'Failed to update report template' });
+  }
+}
+
 module.exports = {
   getSettings,
   updateSettings,
+  updateReportTemplate,
 };

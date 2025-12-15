@@ -35,6 +35,35 @@ import { toast } from '@/components/ui/use-toast';
 import { Label } from '@/components/ui/label';
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table';
 
+function getModulePermission(moduleName: string): { view: boolean; edit: boolean; delete: boolean } {
+  try {
+    const roleRaw = typeof window !== 'undefined' ? window.localStorage.getItem('role') : null;
+    const role = String(roleRaw || '').trim().toLowerCase();
+    const isAdmin = new Set(['admin', 'administrator', 'lab supervisor', 'lab-supervisor', 'supervisor']).has(role);
+    if (isAdmin) {
+      return { view: true, edit: true, delete: true };
+    }
+    const raw = typeof window !== 'undefined' ? window.localStorage.getItem('permissions') : null;
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (!Array.isArray(parsed)) {
+      return { view: true, edit: true, delete: true };
+    }
+
+    const wanted = String(moduleName || '').trim().toLowerCase();
+    const found = parsed.find((p: any) => String(p?.name || '').trim().toLowerCase() === wanted);
+    if (!found) {
+      return { view: true, edit: false, delete: false };
+    }
+    return {
+      view: !!found.view,
+      edit: !!found.edit,
+      delete: !!found.delete,
+    };
+  } catch {
+    return { view: true, edit: true, delete: true };
+  }
+}
+
 interface StaffAttendanceProps {
   isUrdu: boolean;
 }
@@ -81,6 +110,7 @@ type TranslationKeys = {
 };
 
 const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
+  const modulePerm = getModulePermission('Staff Attendance');
   const formatTime = (iso?: string) => {
     if (!iso) return '--:--';
     const d = new Date(iso);
@@ -374,6 +404,10 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
 
   // Save / update staff via backend
   const handleSaveStaff = async (formData: any) => {
+    if (!modulePerm.edit) {
+      toast({ title: isUrdu ? 'اجازت نہیں ہے' : 'Not allowed', description: isUrdu ? 'آپ کے پاس صرف دیکھنے کی اجازت ہے' : 'You only have view permission for Staff Attendance.', variant: 'destructive' });
+      return;
+    }
     try {
       // sanitize payload
       // map only allowed fields
@@ -402,6 +436,10 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
   };
 
   const handleAddAttendance = async (attendanceData: any) => {
+    if (!modulePerm.edit) {
+      toast({ title: isUrdu ? 'اجازت نہیں ہے' : 'Not allowed', description: isUrdu ? 'آپ کے پاس صرف دیکھنے کی اجازت ہے' : 'You only have view permission for Staff Attendance.', variant: 'destructive' });
+      return;
+    }
     try {
       // 1. persist to backend via attendance API
       const saved = await apiAddAttendance(attendanceData);
@@ -426,6 +464,10 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
 
 
   const handleEditStaff = (staffMember: any) => {
+    if (!modulePerm.edit) {
+      toast({ title: isUrdu ? 'اجازت نہیں ہے' : 'Not allowed', description: isUrdu ? 'آپ کے پاس صرف دیکھنے کی اجازت ہے' : 'You only have view permission for Staff Attendance.', variant: 'destructive' });
+      return;
+    }
     setEditingStaff(staffMember);
     setShowStaffForm(true);
   };
@@ -435,6 +477,10 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
   const [staffToDelete, setStaffToDelete] = useState<UIStaff | null>(null);
 
   const handleConfirmDelete = async () => {
+    if (!modulePerm.delete) {
+      toast({ title: isUrdu ? 'اجازت نہیں ہے' : 'Not allowed', description: isUrdu ? 'آپ کے پاس حذف کرنے کی اجازت نہیں ہے' : "You don't have delete permission for Staff Attendance.", variant: 'destructive' });
+      return;
+    }
     if (!staffToDelete) return;
     try {
       if (staffToDelete._id) {
@@ -458,6 +504,10 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
   };
 
   const handleRequestDeleteStaff = (staffMember: UIStaff) => {
+    if (!modulePerm.delete) {
+      toast({ title: isUrdu ? 'اجازت نہیں ہے' : 'Not allowed', description: isUrdu ? 'آپ کے پاس حذف کرنے کی اجازت نہیں ہے' : "You don't have delete permission for Staff Attendance.", variant: 'destructive' });
+      return;
+    }
     setStaffToDelete(staffMember);
     setDeleteDialogOpen(true);
   };
@@ -1085,8 +1135,15 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
                 Staff Report
               </Button>
               <Button 
-                onClick={() => setShowStaffForm(true)}
-                className="w-full sm:w-auto"
+                disabled={!modulePerm.edit}
+                onClick={() => {
+                  if (!modulePerm.edit) {
+                    toast({ title: isUrdu ? 'اجازت نہیں ہے' : 'Not allowed', description: isUrdu ? 'آپ کے پاس صرف دیکھنے کی اجازت ہے' : 'You only have view permission for Staff Attendance.', variant: 'destructive' });
+                    return;
+                  }
+                  setShowStaffForm(true);
+                }}
+                className={!modulePerm.edit ? 'opacity-50 cursor-not-allowed w-full sm:w-auto' : 'w-full sm:w-auto'}
               >
                 <Plus className="h-4 w-4 mr-2" />
                 {t.addStaff}
@@ -1161,9 +1218,16 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
                             disabled={
                               loadingButton===staffMember._id+'-in' ||
                               !!(attendanceToday && attendanceToday.checkIn) ||
-                              !!disabledIn[staffMember._id]
+                              !!disabledIn[staffMember._id] ||
+                              !modulePerm.edit
                             }
-                            onClick={handleClockIn}
+                            onClick={() => {
+                              if (!modulePerm.edit) {
+                                toast({ title: isUrdu ? 'اجازت نہیں ہے' : 'Not allowed', description: isUrdu ? 'آپ کے پاس صرف دیکھنے کی اجازت ہے' : 'You only have view permission for Staff Attendance.', variant: 'destructive' });
+                                return;
+                              }
+                              handleClockIn();
+                            }}
                           >
                             Clock In
                           </Button>
@@ -1173,9 +1237,16 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
                             disabled={
                               loadingButton===staffMember._id+'-out' ||
                               !!(attendanceToday && attendanceToday.checkOut) ||
-                              !!disabledOut[staffMember._id]
+                              !!disabledOut[staffMember._id] ||
+                              !modulePerm.edit
                             }
-                            onClick={handleClockOut}
+                            onClick={() => {
+                              if (!modulePerm.edit) {
+                                toast({ title: isUrdu ? 'اجازت نہیں ہے' : 'Not allowed', description: isUrdu ? 'آپ کے پاس صرف دیکھنے کی اجازت ہے' : 'You only have view permission for Staff Attendance.', variant: 'destructive' });
+                                return;
+                              }
+                              handleClockOut();
+                            }}
                           >
                             Clock Out
                           </Button>
@@ -1220,10 +1291,10 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
                   <div className="flex justify-between items-center mt-4 pt-4 border-t">
                     <span className="text-xs text-gray-500">ID: {staffMember.id}</span>
                     <div className="flex space-x-1">
-                      <Button size="sm" variant="outline" onClick={() => handleEditStaff(staffMember)}>
+                      <Button size="sm" variant="outline" disabled={!modulePerm.edit} onClick={() => handleEditStaff(staffMember)}>
                         <Edit className="h-3 w-3" />
                       </Button>
-                      <Button size="sm" variant="outline" onClick={() => handleRequestDeleteStaff(staffMember)}>
+                      <Button size="sm" variant="outline" disabled={!modulePerm.delete} onClick={() => handleRequestDeleteStaff(staffMember)}>
                         <Trash2 className="h-3 w-3" />
                       </Button>
                       <Button size="sm" variant="outline" onClick={() => handleViewProfile(staffMember)}>
@@ -1303,7 +1374,12 @@ const StaffAttendance: React.FC<StaffAttendanceProps> = ({ isUrdu }) => {
                 </div>
                 <Button 
                   type="button"
+                  disabled={!modulePerm.edit}
                   onClick={async () => {
+                    if (!modulePerm.edit) {
+                      toast({ title: isUrdu ? 'اجازت نہیں ہے' : 'Not allowed', description: isUrdu ? 'آپ کے پاس صرف دیکھنے کی اجازت ہے' : 'You only have view permission for Staff Attendance.', variant: 'destructive' });
+                      return;
+                    }
                     try{
                       await saveAttendanceSettings(attendanceSettings);
                       toast({ title:'Settings saved successfully'});

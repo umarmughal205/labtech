@@ -1,4 +1,5 @@
 const User = require('../models/User');
+const UserManagement = require('../models/UserManagement');
 
 // GET /api/profile/me - return current user's profile
 async function getMyProfile(req, res) {
@@ -8,7 +9,10 @@ async function getMyProfile(req, res) {
       return res.status(401).json({ success: false, message: 'Not authenticated' });
     }
 
-    const user = await User.findById(userId).lean();
+    let user = await UserManagement.findById(userId).lean();
+    if (!user) {
+      user = await User.findById(userId).lean();
+    }
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
@@ -17,6 +21,7 @@ async function getMyProfile(req, res) {
       success: true,
       profile: {
         fullName: user.name || '',
+        role: user.role || '',
         email: user.email || '',
         phone: user.phone || '',
         gender: user.gender || '',
@@ -48,7 +53,10 @@ async function updateMyProfile(req, res) {
     if (typeof age === 'number') update.age = age;
     if (typeof profileImage === 'string') update.profileImageUrl = profileImage;
 
-    const user = await User.findByIdAndUpdate(userId, update, { new: true }).lean();
+    const isInUserManagement = await UserManagement.exists({ _id: userId });
+    const user = isInUserManagement
+      ? await UserManagement.findByIdAndUpdate(userId, update, { new: true }).lean()
+      : await User.findByIdAndUpdate(userId, update, { new: true }).lean();
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
@@ -57,6 +65,7 @@ async function updateMyProfile(req, res) {
       success: true,
       profile: {
         fullName: user.name || '',
+        role: user.role || '',
         email: user.email || '',
         phone: user.phone || '',
         gender: user.gender || '',
@@ -84,11 +93,10 @@ async function saveMyPushToken(req, res) {
       return res.status(400).json({ success: false, message: 'expoPushToken is required' });
     }
 
-    const user = await User.findByIdAndUpdate(
-      userId,
-      { expoPushToken },
-      { new: true }
-    ).lean();
+    const isInUserManagement = await UserManagement.exists({ _id: userId });
+    const user = isInUserManagement
+      ? await UserManagement.findByIdAndUpdate(userId, { expoPushToken }, { new: true }).lean()
+      : await User.findByIdAndUpdate(userId, { expoPushToken }, { new: true }).lean();
 
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });

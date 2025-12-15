@@ -20,14 +20,40 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { api } from "@/lab lib/api";
 
+function getModulePermission(moduleName: string): { view: boolean; edit: boolean; delete: boolean } {
+  try {
+    const roleRaw = typeof window !== 'undefined' ? window.localStorage.getItem('role') : null;
+    const role = String(roleRaw || '').trim().toLowerCase();
+    const isAdmin = new Set(['admin', 'administrator', 'lab supervisor', 'lab-supervisor', 'supervisor']).has(role);
+    if (isAdmin) {
+      return { view: true, edit: true, delete: true };
+    }
+    const raw = typeof window !== 'undefined' ? window.localStorage.getItem('permissions') : null;
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (!Array.isArray(parsed)) {
+      return { view: true, edit: true, delete: true };
+    }
+    const wanted = String(moduleName || '').trim().toLowerCase();
+    const found = parsed.find((p: any) => String(p?.name || '').trim().toLowerCase() === wanted);
+    if (!found) {
+      return { view: true, edit: false, delete: false };
+    }
+    return { view: !!found.view, edit: !!found.edit, delete: !!found.delete };
+  } catch {
+    return { view: true, edit: true, delete: true };
+  }
+}
+
 interface SampleIntakeProps {
   onNavigateBack?: () => void;
 }
 
 const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
   const { toast } = useToast();
+  const modulePerm = getModulePermission('Sample Intake');
   const [availableTests, setAvailableTests] = useState<TestType[]>([]);
   const [selectedTests, setSelectedTests] = useState<TestType[]>([]);
+  const [testPriority, setTestPriority] = useState<'normal' | 'urgent'>('normal');
   const [pendingPrefill, setPendingPrefill] = useState<{ name?: string; phone?: string; testName?: string } | null>(null);
   
   // Sample Management state
@@ -62,6 +88,7 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
   // Pricing settings (tax)
   const [taxRate, setTaxRate] = useState<number>(0);
   const [discountRate, setDiscountRate] = useState<number>(0);
+  const [urgentUpliftRate, setUrgentUpliftRate] = useState<number>(0);
   useEffect(() => {
     api
       .get("/settings")
@@ -69,12 +96,15 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
         const s = res.data || {};
         const tr = parseFloat(String(s?.pricing?.taxRate ?? ""));
         const dr = parseFloat(String(s?.pricing?.bulkDiscountRate ?? ""));
+        const ur = parseFloat(String(s?.pricing?.urgentTestUpliftRate ?? ""));
         setTaxRate(Number.isFinite(tr) ? tr : 0);
         setDiscountRate(Number.isFinite(dr) ? dr : 0);
+        setUrgentUpliftRate(Number.isFinite(ur) ? ur : 0);
       })
       .catch(() => {
         setTaxRate(0);
         setDiscountRate(0);
+        setUrgentUpliftRate(0);
       });
   }, []);
   const computeIncl = (price: number) => {
@@ -214,6 +244,10 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
 
   // Add Sample Modal functions
   const openAddSampleModal = () => {
+    if (!modulePerm.edit) {
+      toast({ title: 'Not allowed', description: "You only have view permission for Sample Intake.", variant: 'destructive' });
+      return;
+    }
     setShowAddSampleModal(true);
     setNewSample({
       patientName: "",
@@ -246,6 +280,10 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
 
   // Handle new sample submission
   const handleAddSample = async () => {
+    if (!modulePerm.edit) {
+      toast({ title: 'Not allowed', description: "You only have view permission for Sample Intake.", variant: 'destructive' });
+      return;
+    }
     if (!newSample.patientName || !newSample.test || !newSample.assignedAnalyzer) {
       toast({
         title: "Error",
@@ -325,6 +363,10 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
   };
 
   const handleEditSample = (sample: any) => {
+    if (!modulePerm.edit) {
+      toast({ title: 'Not allowed', description: "You only have view permission for Sample Intake.", variant: 'destructive' });
+      return;
+    }
     setSelectedSample(sample);
     setEditingSample({
       patientName: sample.patientName,
@@ -636,6 +678,10 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
 
   // Update sample function
   const handleUpdateSample = async () => {
+    if (!modulePerm.edit) {
+      toast({ title: 'Not allowed', description: "You only have view permission for Sample Intake.", variant: 'destructive' });
+      return;
+    }
     if (!editingSample.patientName || !editingSample.test) {
       toast({
         title: "Error",
@@ -706,7 +752,13 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
     guardianName: "",
     cnic: "",
   });
-  const [cnicError, setCnicError] = useState<string>("");
+  const [touched, setTouched] = useState<{ name: boolean; phone: boolean; age: boolean; cnic: boolean; guardianName: boolean }>({
+    name: false,
+    phone: false,
+    age: false,
+    cnic: false,
+    guardianName: false,
+  });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submittedSampleId, setSubmittedSampleId] = useState<string | null>(null);
   const [availableInventory, setAvailableInventory] = useState<any[]>([]);
@@ -716,6 +768,58 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
   const [selItemText, setSelItemText] = useState<string>("");
   const [suggestOpen, setSuggestOpen] = useState<boolean>(false);
   const [highlightIdx, setHighlightIdx] = useState<number>(-1);
+
+  const normalizePhone = (raw: string) => {
+    const v = String(raw || '').trim();
+    if (v.startsWith('+')) {
+      const digits = v.replace(/[^\d]/g, '');
+      return `+${digits}`.slice(0, 13);
+    }
+    return v.replace(/\D/g, '').slice(0, 11);
+  };
+
+  const isValidFullName = (name: string) => {
+    const v = String(name || '').trim();
+    if (!v) return false;
+    return !/\d/.test(v);
+  };
+
+  const isValidPhone = (phone: string) => {
+    const v = String(phone || '').trim();
+    if (v.startsWith('+')) {
+      return /^\+923\d{9}$/.test(v);
+    }
+    return /^03\d{9}$/.test(v);
+  };
+
+  const parseValidAge = (ageRaw: string) => {
+    const digits = String(ageRaw || '').replace(/\D/g, '');
+    if (!digits) return null;
+    const n = parseInt(digits, 10);
+    if (!Number.isFinite(n)) return null;
+    if (n < 1 || n > 120) return null;
+    return n;
+  };
+
+  const nameError = touched.name && !isValidFullName(patientInfo.name)
+    ? 'Full name is required and cannot contain numbers'
+    : '';
+  const phoneError = touched.phone
+    ? !patientInfo.phone
+      ? 'Phone is required'
+      : !isValidPhone(patientInfo.phone)
+        ? 'Phone must be 03XXXXXXXXX or +923XXXXXXXXX'
+        : ''
+    : '';
+  const ageError = touched.age && patientInfo.age && parseValidAge(patientInfo.age) === null
+    ? 'Age must be between 1 and 120'
+    : '';
+  const cnicError = touched.cnic && patientInfo.cnic && patientInfo.cnic.length !== 13
+    ? 'CNIC must be exactly 13 digits (no dashes)'
+    : '';
+  const guardianNameError = touched.guardianName && patientInfo.guardianName && /\d/.test(patientInfo.guardianName)
+    ? 'Guardian name cannot contain numbers'
+    : '';
 
   // refs for Enter navigation
   const phoneRef = useRef<HTMLInputElement>(null);
@@ -829,20 +933,73 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
     setConsumables((prev) => prev.filter((c) => c.itemId !== id));
   };
 
-  const getTotalAmount = () => selectedTests.reduce((t, s) => t + (Number(s.price) || 0), 0);
+  const getBaseTotalAmount = () => selectedTests.reduce((t, s) => t + (Number(s.price) || 0), 0);
+  const getSubtotalAfterUrgent = () => {
+    const base = getBaseTotalAmount();
+    if (testPriority !== 'urgent') return base;
+    const uplift = Number(urgentUpliftRate) || 0;
+    return base * (1 + uplift / 100);
+  };
+  const getDiscountAmount = () => {
+    const base = getSubtotalAfterUrgent();
+    const dr = Number(discountRate) || 0;
+    return base * (dr / 100);
+  };
+  const getSubtotalAfterDiscount = () => {
+    const base = getSubtotalAfterUrgent();
+    return base - getDiscountAmount();
+  };
+  const getTotalAmount = () => {
+    const afterDiscount = getSubtotalAfterDiscount();
+    return computeIncl(afterDiscount).amount;
+  };
 
   const handleSubmit = async () => {
-    if (!patientInfo.name || !patientInfo.phone || selectedTests.length === 0) {
-      toast({ title: "Error", description: "Enter patient name, phone and select at least one test", variant: "destructive" });
+    if (!isValidFullName(patientInfo.name)) {
+      toast({ title: "Error", description: "Full name is required and cannot contain numbers", variant: "destructive" });
+      return;
+    }
+    if (!patientInfo.phone) {
+      toast({ title: "Error", description: "Phone is required", variant: "destructive" });
+      return;
+    }
+    if (!isValidPhone(patientInfo.phone)) {
+      toast({
+        title: "Error",
+        description: "Phone must be 03XXXXXXXXX (11 digits) or +923XXXXXXXXX (13 chars including +)",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (patientInfo.age && parseValidAge(patientInfo.age) === null) {
+      toast({ title: "Error", description: "Age must be a number between 1 and 120", variant: "destructive" });
+      return;
+    }
+    if (patientInfo.cnic) {
+      if (/\D/.test(patientInfo.cnic)) {
+        toast({ title: "Error", description: "CNIC cannot contain characters (digits only)", variant: "destructive" });
+        return;
+      }
+      if (patientInfo.cnic.length !== 13) {
+        toast({ title: "Error", description: "CNIC must be exactly 13 digits (no dashes)", variant: "destructive" });
+        return;
+      }
+    }
+    if (patientInfo.guardianName && /\d/.test(patientInfo.guardianName)) {
+      toast({ title: "Error", description: "Guardian name cannot contain numbers", variant: "destructive" });
+      return;
+    }
+    if (selectedTests.length === 0) {
+      toast({ title: "Error", description: "Select at least one test", variant: "destructive" });
       return;
     }
     setIsSubmitting(true);
     try {
       const payload = {
         patientName: patientInfo.name,
-        phone: patientInfo.phone,
+        phone: normalizePhone(patientInfo.phone),
         // email removed from payload
-        age: patientInfo.age,
+        age: patientInfo.age ? String(parseValidAge(patientInfo.age) ?? '') : "",
         gender: patientInfo.gender,
         address: patientInfo.address,
         guardianRelation: patientInfo.guardianRelation || undefined,
@@ -851,6 +1008,7 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
         tests: selectedTests.map((t: any) => (t?._id ?? t?.id)).filter(Boolean),
         consumables: consumables.map((c) => ({ item: c.itemId, quantity: c.quantity })),
         totalAmount: getTotalAmount(),
+        priority: testPriority,
         status: "collected",
       };
       let created: any = null;
@@ -892,6 +1050,13 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
       } catch {}
       // Print sample slip (best effort)
       try {
+        const base = getBaseTotalAmount();
+        const urgentSubtotal = getSubtotalAfterUrgent();
+        const urgentExtra = Math.max(0, urgentSubtotal - base);
+        const discountAmt = getDiscountAmount();
+        const afterDiscount = getSubtotalAfterDiscount();
+        const c = computeIncl(afterDiscount);
+        const taxAmt = c.amount - afterDiscount;
         printSampleSlip({
           sampleNumber: created.sampleNumber,
           dateTime: created.createdAt,
@@ -904,6 +1069,12 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
           gender: patientInfo.gender,
           address: patientInfo.address,
           tests: selectedTests.map(t => ({ name: t.name, price: t.price })),
+          urgentRate: testPriority === 'urgent' ? (Number(urgentUpliftRate) || 0) : 0,
+          urgentAmount: testPriority === 'urgent' ? urgentExtra : 0,
+          discountRate: Number(discountRate) || 0,
+          discountAmount: discountAmt,
+          taxRate: Number(taxRate) || 0,
+          taxAmount: taxAmt,
           totalAmount: getTotalAmount(),
         });
       } catch {}
@@ -916,6 +1087,7 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
           patientName: patientInfo.name,
           tests: selectedTests.map((t: any) => ({ name: t?.name, price: t?.price })),
           test: selectedTests.map((t: any) => t?.name).filter(Boolean).join(', '),
+          priority: testPriority,
           phone: patientInfo.phone,
           patientPhone: patientInfo.phone,
           cnic: patientInfo.cnic,
@@ -936,6 +1108,7 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
       try { window.dispatchEvent(new Event('sampleSubmitted')); window.dispatchEvent(new Event('samplesChanged')); } catch {}
       // reset
       setSelectedTests([]);
+      setTestPriority('normal');
       setPatientInfo({ name: "", phone: "", age: "", gender: "", address: "", guardianRelation: "", guardianName: "", cnic: "" });
       setConsumables([]);
     } catch (err: any) {
@@ -948,12 +1121,11 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
 
   if (submittedSampleId) {
     return (
-      <div className="p-6 flex items-center justify-center min-h-[400px]">
+      <div className="min-h-screen flex items-center justify-center p-6">
         <Card className="max-w-md text-center">
           <CardContent className="p-8">
             <Check className="w-16 h-16 text-green-500 mx-auto mb-4" />
             <h2 className="text-2xl font-bold text-green-700 mb-2">Sample Submitted!</h2>
-            <p className="text-gray-600 mb-4">ID: {submittedSampleId}</p>
             <Button onClick={() => setSubmittedSampleId(null)}>New Sample</Button>
           </CardContent>
         </Card>
@@ -982,29 +1154,51 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
               <Label>Full Name *</Label>
               <Input
                 value={patientInfo.name}
-                onChange={(e) => setPatientInfo({ ...patientInfo, name: e.target.value })}
+                placeholder="Enter full name"
+                onChange={(e) => {
+                  const v = (e.target.value || '').replace(/\d/g, '');
+                  setPatientInfo({ ...patientInfo, name: v });
+                }}
+                onBlur={() => setTouched((p) => ({ ...p, name: true }))}
                 onKeyDown={(e) => handleEnter(e, phoneRef)}
                 className="h-10"
                 required
               />
+              {nameError && <div className="text-sm text-red-600 mt-1">{nameError}</div>}
             </div>
             <div>
               <Label>Phone *</Label>
               <Input
                 ref={phoneRef}
                 value={patientInfo.phone}
-                onChange={(e) => setPatientInfo({ ...patientInfo, phone: e.target.value })}
+                onChange={(e) => {
+                  const next = normalizePhone(e.target.value);
+                  setPatientInfo({ ...patientInfo, phone: next });
+                }}
+                onBlur={() => setTouched((p) => ({ ...p, phone: true }))}
+                inputMode="tel"
+                maxLength={13}
+                placeholder="03XXXXXXXXX or +923XXXXXXXXX"
                 className="h-10"
                 required
               />
+              {phoneError && <div className="text-sm text-red-600 mt-1">{phoneError}</div>}
             </div>
             <div>
               <Label>Age</Label>
               <Input
                 value={patientInfo.age}
-                onChange={(e) => setPatientInfo({ ...patientInfo, age: e.target.value })}
+                placeholder="Enter age"
+                onChange={(e) => {
+                  const digits = (e.target.value || '').replace(/\D/g, '').slice(0, 3);
+                  setPatientInfo({ ...patientInfo, age: digits });
+                }}
+                onBlur={() => setTouched((p) => ({ ...p, age: true }))}
+                inputMode="numeric"
+                pattern="[0-9]*"
                 className="h-10"
               />
+              {ageError && <div className="text-sm text-red-600 mt-1">{ageError}</div>}
             </div>
           </div>
           {/* Patient row 2 */}
@@ -1026,6 +1220,7 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
               <Label>Address</Label>
               <Input
                 value={patientInfo.address}
+                placeholder="Enter address"
                 onChange={(e) => setPatientInfo({ ...patientInfo, address: e.target.value })}
                 className="h-10"
               />
@@ -1038,13 +1233,12 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
                   // Keep only digits, max 13
                   const digits = (e.target.value || "").replace(/\D/g, "").slice(0, 13);
                   setPatientInfo({ ...patientInfo, cnic: digits });
-                  if (digits && digits.length !== 13) setCnicError("CNIC must be exactly 13 digits (no dashes)");
-                  else setCnicError("");
                 }}
+                onBlur={() => setTouched((p) => ({ ...p, cnic: true }))}
                 inputMode="numeric"
                 pattern="[0-9]*"
                 maxLength={13}
-                placeholder="13-digit without dashes"
+                placeholder="Enter 13-digit CNIC"
                 className="h-10"
               />
               {cnicError && <div className="text-sm text-red-600 mt-1">{cnicError}</div>}
@@ -1069,9 +1263,15 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
               <Label>Guardian Name</Label>
               <Input
                 value={patientInfo.guardianName}
-                onChange={(e) => setPatientInfo({ ...patientInfo, guardianName: e.target.value })}
+                placeholder="Enter guardian name"
+                onChange={(e) => {
+                  const v = (e.target.value || '').replace(/\d/g, '');
+                  setPatientInfo({ ...patientInfo, guardianName: v });
+                }}
+                onBlur={() => setTouched((p) => ({ ...p, guardianName: true }))}
                 className="h-10"
               />
+              {guardianNameError && <div className="text-sm text-red-600 mt-1">{guardianNameError}</div>}
             </div>
             <div className="hidden md:block" />
           </div>
@@ -1086,6 +1286,18 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
           <CardDescription>Type to search and pick multiple tests</CardDescription>
         </CardHeader>
         <CardContent>
+          <div className="mb-4 max-w-sm">
+            <Label>Test Type</Label>
+            <Select value={testPriority} onValueChange={(v) => setTestPriority(v as 'normal' | 'urgent')}>
+              <SelectTrigger className="mt-1 h-10">
+                <SelectValue placeholder="Select test type" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="normal">Normal</SelectItem>
+                <SelectItem value="urgent">Urgent</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
           <TestSelect tests={availableTests} selected={selectedTests} onChange={setSelectedTests} />
         </CardContent>
       </Card>
@@ -1141,7 +1353,26 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
             </div>
             <div>
               <Label>Quantity</Label>
-              <Input type="number" value={selQty} onChange={(e) => setSelQty(e.target.value)} className="h-10" />
+              <Input
+                type="number"
+                min={1}
+                step={1}
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={selQty}
+                onChange={(e) => {
+                  const raw = String(e.target.value || '');
+                  const digits = raw.replace(/\D/g, '');
+                  setSelQty(digits);
+                }}
+                onBlur={() => {
+                  const n = parseInt(String(selQty || ''), 10);
+                  if (!Number.isFinite(n) || n < 1) {
+                    setSelQty('1');
+                  }
+                }}
+                className="h-10"
+              />
             </div>
             <div className="flex justify-end">
               <Button onClick={addConsumable}>Add</Button>
@@ -1178,15 +1409,25 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
                 </div>
               </div>
             ))}
-            <div className="flex justify-between pt-2 border-t font-semibold">
-              <span>Total</span>
-              <span>PKR {getTotalAmount().toFixed(2)}</span>
-            </div>
+            {testPriority === 'urgent' && (
+              <div className="flex justify-between text-sm">
+                {(() => {
+                  const base = getBaseTotalAmount();
+                  const uplift = Number(urgentUpliftRate) || 0;
+                  const extra = getSubtotalAfterUrgent() - base;
+                  return (
+                    <>
+                      <span>Urgent uplift ({uplift.toFixed(0)}%)</span>
+                      <span>+ PKR {extra.toFixed(2)}</span>
+                    </>
+                  );
+                })()}
+              </div>
+            )}
             <div className="flex justify-between text-sm">
               {(() => {
-                const base = getTotalAmount();
                 const dr = Number(discountRate) || 0;
-                const disc = base * (dr / 100);
+                const disc = getDiscountAmount();
                 return (
                   <>
                     <span>Discount ({dr.toFixed(0)}%)</span>
@@ -1197,16 +1438,19 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
             </div>
             <div className="flex justify-between text-sm">
               {(() => { 
-                const base = getTotalAmount();
-                const dr = Number(discountRate) || 0;
-                const afterDiscount = base * (1 - dr / 100);
-                const c = computeIncl(afterDiscount); 
+                const base = getSubtotalAfterDiscount();
+                const c = computeIncl(base);
+                const tax = c.amount - base;
                 return (
                 <>
-                  <span>Total Incl. tax ({c.rate.toFixed(0)}%)</span>
-                  <span>PKR {c.amount.toFixed(2)}</span>
+                  <span>Tax ({c.rate.toFixed(0)}%)</span>
+                  <span>+ PKR {tax.toFixed(2)}</span>
                 </>
               ); })()}
+            </div>
+            <div className="flex justify-between pt-2 border-t font-semibold">
+              <span>Total</span>
+              <span>PKR {getTotalAmount().toFixed(2)}</span>
             </div>
           </CardContent>
         </Card>
@@ -1215,7 +1459,7 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
       {/* Actions */}
       <div className="flex justify-end gap-3">
         <Button variant="outline" onClick={onNavigateBack}>Cancel</Button>
-        <Button className="bg-blue-600 hover:bg-blue-700" onClick={handleSubmit} disabled={isSubmitting || selectedTests.length === 0}>
+        <Button className="bg-blue-600 hover:bg-blue-700" onClick={handleSubmit} disabled={isSubmitting || selectedTests.length === 0 || !modulePerm.edit}>
           {isSubmitting ? "Submitting..." : "Submit Sample"}
         </Button>
       </div>
@@ -1290,6 +1534,7 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
                   handleEditSample(selectedSample);
                 }}
                 className="bg-blue-600 hover:bg-blue-700"
+                disabled={!modulePerm.edit}
               >
                 Edit Sample
               </Button>
@@ -1329,6 +1574,7 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
                   value={editingSample.patientName}
                   onChange={(e) => setEditingSample({ ...editingSample, patientName: e.target.value })}
                   className="mt-1"
+                  disabled={!modulePerm.edit}
                 />
               </div>
 
@@ -1337,6 +1583,7 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
                 <Select 
                   value={editingSample.test} 
                   onValueChange={(value) => setEditingSample({ ...editingSample, test: value })}
+                  disabled={!modulePerm.edit}
                 >
                   <SelectTrigger className="mt-1">
                     <SelectValue />
@@ -1356,6 +1603,7 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
                 <Select 
                   value={editingSample.status} 
                   onValueChange={(value) => setEditingSample({ ...editingSample, status: value })}
+                  disabled={!modulePerm.edit}
                 >
                   <SelectTrigger className="mt-1">
                     <SelectValue />
@@ -1383,7 +1631,7 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
               </Button>
               <Button 
                 onClick={handleUpdateSample}
-                disabled={isUpdatingSample || !editingSample.patientName || !editingSample.test}
+                disabled={isUpdatingSample || !editingSample.patientName || !editingSample.test || !modulePerm.edit}
                 className="bg-blue-600 hover:bg-blue-700"
               >
                 {isUpdatingSample ? "Updating..." : "Update Sample"}

@@ -5,6 +5,36 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Bell, AlertTriangle, Info, CheckCircle, X, CheckCircle2 } from "lucide-react";
 import { api } from "@/lib/api";
+import { toast } from "@/components/ui/use-toast";
+
+function getModulePermission(moduleName: string): { view: boolean; edit: boolean; delete: boolean } {
+  try {
+    const roleRaw = typeof window !== 'undefined' ? window.localStorage.getItem('role') : null;
+    const role = String(roleRaw || '').trim().toLowerCase();
+    const isAdmin = new Set(['admin', 'administrator', 'lab supervisor', 'lab-supervisor', 'supervisor']).has(role);
+    if (isAdmin) {
+      return { view: true, edit: true, delete: true };
+    }
+    const raw = typeof window !== 'undefined' ? window.localStorage.getItem('permissions') : null;
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (!Array.isArray(parsed)) {
+      return { view: true, edit: true, delete: true };
+    }
+
+    const wanted = String(moduleName || '').trim().toLowerCase();
+    const found = parsed.find((p: any) => String(p?.name || '').trim().toLowerCase() === wanted);
+    if (!found) {
+      return { view: true, edit: false, delete: false };
+    }
+    return {
+      view: !!found.view,
+      edit: !!found.edit,
+      delete: !!found.delete,
+    };
+  } catch {
+    return { view: true, edit: true, delete: true };
+  }
+}
 
 interface INotification {
   _id: string;
@@ -18,6 +48,7 @@ interface INotification {
 }
 
 const Notifications = () => {
+  const modulePerm = getModulePermission('Notifications');
   const [notifications, setNotifications] = useState<INotification[]>([]);
   const [ackLocal, setAckLocal] = useState<string[]>([]);
 
@@ -102,6 +133,10 @@ const Notifications = () => {
   };
 
   const markAsRead = async (notificationId: string) => {
+    if (!modulePerm.edit) {
+      toast({ title: 'Not allowed', description: 'You only have view permission for Notifications.', variant: 'destructive' });
+      return;
+    }
     try {
       updateLocal(notificationId, { read: true });
       // Backend: PATCH /notifications/mine/:id/read
@@ -112,6 +147,10 @@ const Notifications = () => {
   };
 
   const markAllAsRead = () => {
+    if (!modulePerm.edit) {
+      toast({ title: 'Not allowed', description: 'You only have view permission for Notifications.', variant: 'destructive' });
+      return;
+    }
     // Mark all current backend notifications as read in local state
     setNotifications(prev => prev.map(n => ({ ...n, read: true })));
     // Fire-and-forget backend call to mark all as read
@@ -121,6 +160,10 @@ const Notifications = () => {
   };
 
   const deleteNotification = (notificationId: string) => {
+    if (!modulePerm.delete) {
+      toast({ title: 'Not allowed', description: "You don't have delete permission for Notifications.", variant: 'destructive' });
+      return;
+    }
     setNotifications(prev => prev.filter(notification => notification._id !== notificationId));
   };
 
@@ -152,7 +195,7 @@ const Notifications = () => {
           </p>
         </div>
         {unreadCount > 0 && (
-          <Button onClick={markAllAsRead}>
+          <Button disabled={!modulePerm.edit} onClick={markAllAsRead}>
             <CheckCircle2 className="w-4 h-4 mr-2" />
             Mark All as Read
           </Button>
@@ -196,6 +239,7 @@ const Notifications = () => {
                     <Button 
                       size="sm" 
                       variant="outline"
+                      disabled={!modulePerm.edit}
                       onClick={() => markAsRead(notification._id)}
                     >
                       <CheckCircle className="w-3 h-3 mr-1" />
@@ -206,6 +250,7 @@ const Notifications = () => {
                     <Button 
                       size="sm" 
                       variant="ghost"
+                      disabled={!modulePerm.delete}
                       onClick={() => deleteNotification(notification._id)}
                     >
                       <X className="w-3 h-3" />

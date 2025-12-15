@@ -36,6 +36,41 @@ interface TestCatalogProps {
 }
 
 const TestCatalog = ({ onNavigateBack }: TestCatalogProps) => {
+  const [modulePerm, setModulePerm] = useState<{ view: boolean; edit: boolean; delete: boolean }>({
+    view: true,
+    edit: true,
+    delete: true,
+  });
+
+  useEffect(() => {
+    const loadPerms = () => {
+      try {
+        const raw = typeof window !== 'undefined' ? localStorage.getItem('permissions') : null;
+        const parsed = raw ? JSON.parse(raw) : null;
+        if (!Array.isArray(parsed) || parsed.length === 0) return;
+        const p = parsed.find((x: any) => String(x?.name || '').trim() === 'Test Catalog');
+        if (!p) return;
+        setModulePerm({
+          view: !!p.view,
+          edit: !!p.edit,
+          delete: !!p.delete,
+        });
+      } catch {
+        // ignore
+      }
+    };
+
+    loadPerms();
+    const onStorage = () => loadPerms();
+    const onFocus = () => loadPerms();
+    window.addEventListener('storage', onStorage);
+    window.addEventListener('focus', onFocus);
+    return () => {
+      window.removeEventListener('storage', onStorage);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, []);
+
   // Basic CSV parser (handles quoted fields and commas within quotes)
   const parseCSV = (text: string): any[] => {
     const rows: string[][] = [];
@@ -429,6 +464,10 @@ const TestCatalog = ({ onNavigateBack }: TestCatalogProps) => {
   });
 
   const handleAddTest = async () => {
+    if (!modulePerm.edit) {
+      toast({ title: "Not allowed", description: "You don't have permission to add tests.", variant: "destructive" });
+      return;
+    }
     if (!newTest.name || !newTest.category || !newTest.notes) {
       toast({
         title: "Error",
@@ -513,6 +552,10 @@ const TestCatalog = ({ onNavigateBack }: TestCatalogProps) => {
 
   const handleEditTest = async () => {
     if (!editingTest) return;
+    if (!modulePerm.edit) {
+      toast({ title: "Not allowed", description: "You don't have permission to edit tests.", variant: "destructive" });
+      return;
+    }
     // Option B for Edit: map single-field inputs if parameters list is empty
     const et: any = editingTest as any;
     const hasList = Array.isArray(et.parameters) && et.parameters.length > 0;
@@ -560,6 +603,10 @@ const TestCatalog = ({ onNavigateBack }: TestCatalogProps) => {
   };
 
   const handleDeleteTest = async (id: string) => {
+    if (!modulePerm.delete) {
+      toast({ title: "Not allowed", description: "You don't have permission to delete tests.", variant: "destructive" });
+      return;
+    }
     try {
       await api.delete(`/tests/${id}`);
     } catch {
@@ -611,15 +658,16 @@ const TestCatalog = ({ onNavigateBack }: TestCatalogProps) => {
   return (
     <div className="p-4 sm:p-6 space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="space-y-1">
           <h1 className="text-2xl font-bold text-gray-900">Test Catalog</h1>
-          <p className="text-sm text-gray-600">Manage available laboratory tests</p>
+          <p className="text-sm text-gray-600">Manage and view all available lab tests</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex sm:justify-end">
           <Button 
             className="flex items-center gap-2 bg-blue-800 text-white hover:bg-blue-700"
             onClick={() => setIsAddingTest(true)}
+            disabled={!modulePerm.edit}
           >
             <Plus className="w-4 h-4" />
             Add New Test
@@ -904,6 +952,7 @@ const TestCatalog = ({ onNavigateBack }: TestCatalogProps) => {
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') (editingTest ? handleEditTest() : handleAddTest());
                 }}
+                disabled={!modulePerm.edit}
               >
                 {editingTest ? "Update Test" : "Add Test"}
               </Button>
@@ -1066,33 +1115,37 @@ const TestCatalog = ({ onNavigateBack }: TestCatalogProps) => {
                 <button className="flex items-center gap-1 text-gray-700 hover:text-gray-900" onClick={() => setViewTest(test)}>
                   <Eye className="w-4 h-4" /> View
                 </button>
-                <button className="flex items-center gap-1 text-gray-700 hover:text-gray-900" onClick={() => openEditTest(test)}>
-                  <Edit className="w-4 h-4" /> Edit
-                </button>
-                <AlertDialog>
-                  <AlertDialogTrigger asChild>
-                    <button className="flex items-center gap-1 text-red-600 hover:text-red-700">
-                      <Trash2 className="w-4 h-4" /> Delete
-                    </button>
-                  </AlertDialogTrigger>
-                  <AlertDialogContent>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Delete Test</AlertDialogTitle>
-                      <AlertDialogDescription>
-                        Are you sure you want to delete this test? This action cannot be undone.
-                      </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel>Cancel</AlertDialogCancel>
-                      <AlertDialogAction
-                        className="bg-red-600 hover:bg-red-700"
-                        onClick={() => handleDeleteTest(test._id as string)}
-                      >
-                        Delete
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
+                {modulePerm.edit ? (
+                  <button className="flex items-center gap-1 text-gray-700 hover:text-gray-900" onClick={() => openEditTest(test)}>
+                    <Edit className="w-4 h-4" /> Edit
+                  </button>
+                ) : null}
+                {modulePerm.delete ? (
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <button className="flex items-center gap-1 text-red-600 hover:text-red-700">
+                        <Trash2 className="w-4 h-4" /> Delete
+                      </button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Delete Test</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          Are you sure you want to delete this test? This action cannot be undone.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                          className="bg-red-600 hover:bg-red-700"
+                          onClick={() => handleDeleteTest(test._id as string)}
+                        >
+                          Delete
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                ) : null}
               </div>
             </CardContent>
           </Card>

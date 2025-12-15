@@ -37,12 +37,14 @@ export function printHtmlOverlay(html: string, options?: {
   bar.style.justifyContent = 'space-between';
   bar.style.padding = '10px 12px';
   bar.style.borderBottom = '1px solid #e2e8f0';
-  bar.style.background = '#f8fafc';
-  bar.innerHTML = `<div style="font-weight:700;color:#0f172a">${(options?.title || 'Print Preview')}</div>
-    <div>
-      <button id="tp-btn-print" style="padding:6px 10px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;cursor:pointer;">Print (Ctrl+P)</button>
-      <button id="tp-btn-close" style="padding:6px 10px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;cursor:pointer;margin-left:8px;">Close (Ctrl+D)</button>
-    </div>`;
+  bar.style.background = '#ffffff';
+  bar.innerHTML = `
+    <div style="font-weight:700; font-size:13px; color:#0f172a;">Receipt Preview</div>
+    <div style="display:flex; gap:8px;">
+      <button id="tp-btn-print" type="button" style="padding:6px 10px; border:1px solid #cbd5e1; background:#ffffff; border-radius:8px; font-weight:700; font-size:12px; cursor:pointer;">Print</button>
+      <button id="tp-btn-close" type="button" style="padding:6px 10px; border:1px solid #cbd5e1; background:#0f172a; color:#ffffff; border-radius:8px; font-weight:700; font-size:12px; cursor:pointer;">Close</button>
+    </div>
+  `;
 
   const frame = document.createElement('iframe');
   frame.style.width = '100%';
@@ -84,14 +86,21 @@ export function printHtmlOverlay(html: string, options?: {
     try { document.removeEventListener('keydown', onKey, true); } catch {}
     try { overlay.remove(); } catch {}
   };
+
+  (bar.querySelector('#tp-btn-print') as HTMLButtonElement | null)?.addEventListener('click', onPrint);
+  (bar.querySelector('#tp-btn-close') as HTMLButtonElement | null)?.addEventListener('click', onClose);
   const onKey = (e: KeyboardEvent) => {
     const k = (e.key || '').toLowerCase();
     if (e.ctrlKey && k === 'p') { e.preventDefault(); onPrint(e); }
     if (e.ctrlKey && k === 'd') { e.preventDefault(); onClose(e); }
   };
   document.addEventListener('keydown', onKey, true);
-  (bar.querySelector('#tp-btn-print') as HTMLButtonElement)?.addEventListener('click', onPrint);
-  (bar.querySelector('#tp-btn-close') as HTMLButtonElement)?.addEventListener('click', onClose);
+  // Allow closing by clicking on the dimmed background (but not inside the report box)
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) {
+      onClose(e);
+    }
+  });
 
   function injectContrastStyles(){
     try {
@@ -99,9 +108,9 @@ export function printHtmlOverlay(html: string, options?: {
       if (!doc) return;
       const style = doc.createElement('style');
       style.textContent = `
-        html, body { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-        body, body * { color: #000 !important; font-weight: 700 !important; text-shadow: none !important; }
-        @page { margin: 8mm; }
+        html, body { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; height: 100%; }
+        body, body * { color: #000 !important; font-weight: 700 !important; text-shadow: none !important; box-shadow: none !important; }
+        @page { size: A4; margin: 8mm; }
       `;
       doc.head?.appendChild(style);
     } catch {}

@@ -16,6 +16,36 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api } from "@/lab lib/api";
+import { useSettings } from "@/contexts/SettingsContext";
+
+function getModulePermission(moduleName: string): { view: boolean; edit: boolean; delete: boolean } {
+  try {
+    const roleRaw = typeof window !== 'undefined' ? window.localStorage.getItem('role') : null;
+    const role = String(roleRaw || '').trim().toLowerCase();
+    const isAdmin = new Set(['admin', 'administrator', 'lab supervisor', 'lab-supervisor', 'supervisor']).has(role);
+    if (isAdmin) {
+      return { view: true, edit: true, delete: true };
+    }
+    const raw = typeof window !== 'undefined' ? window.localStorage.getItem('permissions') : null;
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (!Array.isArray(parsed)) {
+      return { view: true, edit: true, delete: true };
+    }
+
+    const wanted = String(moduleName || '').trim().toLowerCase();
+    const found = parsed.find((p: any) => String(p?.name || '').trim().toLowerCase() === wanted);
+    if (!found) {
+      return { view: true, edit: false, delete: false };
+    }
+    return {
+      view: !!found.view,
+      edit: !!found.edit,
+      delete: !!found.delete,
+    };
+  } catch {
+    return { view: true, edit: true, delete: true };
+  }
+}
 
 // Types for settings
 type LabSettings = {
@@ -36,6 +66,7 @@ type PricingSettings = {
   defaultCurrency: string;
   taxRate: number;
   bulkDiscountRate: number;
+  urgentTestUpliftRate: number;
 };
 
 type NotificationSettings = {
@@ -71,6 +102,7 @@ const DEFAULT_PRICING_SETTINGS: PricingSettings = {
   defaultCurrency: "PKR",
   taxRate: 0,
   bulkDiscountRate: 0,
+  urgentTestUpliftRate: 0,
 };
 
 const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
@@ -88,6 +120,10 @@ const DEFAULT_BACKUP_SETTINGS: BackupSettings = {
 };
 
 const Settings = () => {
+  const { toast } = useToast();
+  const { setSettings } = useSettings();
+  const modulePerm = getModulePermission('Settings');
+
   const [labSettings, setLabSettings] = useState<LabSettings>(DEFAULT_LAB_SETTINGS);
 
   const [pricingSettings, setPricingSettings] = useState<PricingSettings>(DEFAULT_PRICING_SETTINGS);
@@ -95,8 +131,6 @@ const Settings = () => {
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>(DEFAULT_NOTIFICATION_SETTINGS);
 
   const [backupSettings, setBackupSettings] = useState<BackupSettings>(DEFAULT_BACKUP_SETTINGS);
-
-  const { toast } = useToast();
 
   const [isSaving, setIsSaving] = useState(false);
   const fileRef = React.useRef<HTMLInputElement>(null);
@@ -109,18 +143,33 @@ const Settings = () => {
   const [fromDate2, setFromDate2] = useState<string>("");
 
   const handleLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!modulePerm.edit) {
+      toast({ title: 'Not allowed', description: 'You only have view permission for Settings.', variant: 'destructive' });
+      return;
+    }
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
       const dataUrl = reader.result as string;
       setLogoUrl(dataUrl);
+      // Immediately reflect logo change in global settings so headers/update live
+      const subtitleFromAcc = (labSettings.accreditationBody || '').trim();
+      setSettings({
+        hospitalName: labSettings.labName || 'Hospital Name',
+        labLogoUrl: dataUrl,
+        labSubtitle: subtitleFromAcc || null,
+      });
       toast({ title: 'Logo updated', description: 'This logo will appear on receipts.' });
     };
     reader.readAsDataURL(file);
   };
 
   const handleSelectedDateBackup = async () => {
+    if (!modulePerm.edit) {
+      toast({ title: 'Not allowed', description: 'You only have view permission for Settings.', variant: 'destructive' });
+      return;
+    }
     const from = fromDate1?.trim();
     const to = fromDate2?.trim();
     const isDate = (d?: string) => /^\d{4}-\d{2}-\d{2}$/.test(String(d || ''));
@@ -158,12 +207,20 @@ const Settings = () => {
   };
 
   const handleRemoveLogo = () => {
+    if (!modulePerm.edit) {
+      toast({ title: 'Not allowed', description: 'You only have view permission for Settings.', variant: 'destructive' });
+      return;
+    }
     setLogoUrl('');
     if (logoInputRef.current) logoInputRef.current.value = '';
     toast({ title: 'Logo removed' });
   };
 
   const handleManualBackup = async () => {
+    if (!modulePerm.edit) {
+      toast({ title: 'Not allowed', description: 'You only have view permission for Settings.', variant: 'destructive' });
+      return;
+    }
     try {
       const res = await fetch(`${API_BASE}/backup/manual`, { method: 'POST' });
       if (!res.ok) throw new Error('Failed');
@@ -176,6 +233,10 @@ const Settings = () => {
   };
 
   const handleDeleteAll = async () => {
+    if (!modulePerm.delete) {
+      toast({ title: 'Not allowed', description: "You don't have delete permission for Settings.", variant: 'destructive' });
+      return;
+    }
     if (!confirm('Are you sure? This will delete ALL data and cannot be undone.')) return;
     try {
       const res = await fetch(`${API_BASE}/backup/purge`, { method: 'POST' });
@@ -187,6 +248,10 @@ const Settings = () => {
   };
 
   const handleImportBackup: React.ChangeEventHandler<HTMLInputElement> = async (e) => {
+    if (!modulePerm.edit) {
+      toast({ title: 'Not allowed', description: 'You only have view permission for Settings.', variant: 'destructive' });
+      return;
+    }
     const file = e.target.files?.[0];
     if (!file) return;
     try {
@@ -244,6 +309,36 @@ const Settings = () => {
         if (lab.logoUrl) {
           setLogoUrl(lab.logoUrl);
         }
+
+        // Persist key lab settings locally so other screens can read them immediately
+        try {
+          localStorage.setItem('labSettings', JSON.stringify(lab));
+          if (lab.labName) localStorage.setItem('labName', lab.labName);
+          if (lab.logoUrl) localStorage.setItem('labLogoUrl', lab.logoUrl);
+          // Map accreditation body to a generic accreditation text used by report headers
+          if (lab.accreditationBody) {
+            const subtitle = String(lab.accreditationBody).trim();
+            if (subtitle) {
+              const existing = lab || {};
+              const enhanced = { ...existing, accreditationText: subtitle };
+              localStorage.setItem('labSettings', JSON.stringify(enhanced));
+            }
+          }
+        } catch {
+          // ignore storage errors
+        }
+
+        // Update global SettingsContext so any open pages react immediately
+        const labAny: any = lab;
+        const subtitleText =
+          (labAny?.accreditationBody && String(labAny.accreditationBody).trim()) ||
+          (labAny?.accreditationText && String(labAny.accreditationText).trim()) ||
+          null;
+        setSettings({
+          hospitalName: lab.labName || 'Hospital Name',
+          labLogoUrl: lab.logoUrl || null,
+          labSubtitle: subtitleText,
+        });
       } catch (err) {
         console.error('Failed to load settings', err);
         toast({ title: 'Error', description: 'Failed to load settings from server', variant: 'destructive' });
@@ -253,6 +348,10 @@ const Settings = () => {
   }, []);
 
   const handleSaveAll = async () => {
+    if (!modulePerm.edit) {
+      toast({ title: 'Not allowed', description: 'You only have view permission for Settings.', variant: 'destructive' });
+      return;
+    }
     try {
       const payload = {
         lab: { ...labSettings, logoUrl },
@@ -268,6 +367,35 @@ const Settings = () => {
       if (data.notifications) setNotificationSettings({ ...DEFAULT_NOTIFICATION_SETTINGS, ...data.notifications });
       if (data.backup) setBackupSettings({ ...DEFAULT_BACKUP_SETTINGS, ...data.backup });
       if (data.lab?.logoUrl) setLogoUrl(data.lab.logoUrl);
+
+      // Immediately persist latest lab settings to localStorage for other components
+      try {
+        const labToStore = data.lab || { ...labSettings, logoUrl };
+        localStorage.setItem('labSettings', JSON.stringify(labToStore));
+        if (labToStore.labName) localStorage.setItem('labName', labToStore.labName);
+        if (labToStore.logoUrl) localStorage.setItem('labLogoUrl', labToStore.logoUrl);
+        if ((labToStore as any)?.accreditationBody) {
+          const subtitle = String((labToStore as any).accreditationBody).trim();
+          if (subtitle) {
+            const enhanced = { ...labToStore, accreditationText: subtitle };
+            localStorage.setItem('labSettings', JSON.stringify(enhanced));
+          }
+        }
+
+        // Broadcast latest values through SettingsContext for live updates
+        const labAny: any = labToStore;
+        const subtitleText =
+          (labAny?.accreditationBody && String(labAny.accreditationBody).trim()) ||
+          (labAny?.accreditationText && String(labAny.accreditationText).trim()) ||
+          null;
+        setSettings({
+          hospitalName: labToStore.labName || 'Hospital Name',
+          labLogoUrl: labToStore.logoUrl || null,
+          labSubtitle: subtitleText,
+        });
+      } catch {
+        // ignore storage errors
+      }
 
       toast({ title: 'Settings saved', description: 'All changes saved to server.' });
     } catch (err) {
@@ -346,7 +474,18 @@ const Settings = () => {
                 <Input
                   id="labName"
                   value={labSettings.labName}
-                  onChange={(e) => setLabSettings({...labSettings, labName: e.target.value})}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    const nextLab = { ...labSettings, labName: value };
+                    setLabSettings(nextLab);
+                    const subtitleFromAcc = (nextLab.accreditationBody || '').trim();
+                    // Push live changes into SettingsContext so top header updates immediately
+                    setSettings({
+                      hospitalName: value || 'Hospital Name',
+                      labLogoUrl: logoUrl || null,
+                      labSubtitle: subtitleFromAcc || null,
+                    });
+                  }}
                 />
               </div>
               
@@ -429,13 +568,14 @@ const Settings = () => {
                     ref={logoInputRef}
                     type="file"
                     accept="image/*"
+                    disabled={!modulePerm.edit}
                     onChange={handleLogoChange}
                     className="block w-full max-w-sm text-sm text-gray-900 border border-gray-300 rounded-lg cursor-pointer bg-gray-50"
                   />
                   {logoUrl && (
                     <div className="flex items-center gap-3">
                       <img src={logoUrl} alt="Lab Logo Preview" className="h-16 w-16 object-contain border rounded" />
-                      <Button variant="destructive" type="button" onClick={handleRemoveLogo}>Remove</Button>
+                      <Button variant="destructive" type="button" disabled={!modulePerm.edit} onClick={handleRemoveLogo}>Remove</Button>
                     </div>
                   )}
                 </div>
@@ -479,7 +619,21 @@ const Settings = () => {
                     type="number"
                     value={pricingSettings.taxRate}
                     onChange={(e) => setPricingSettings({...pricingSettings, taxRate: parseFloat(e.target.value) || 0})}
+                    disabled={!modulePerm.edit}
                   />
+                  <div className="pt-2">
+                    <Label htmlFor="urgentTestUpliftRate">Urgent Test Uplift (%)</Label>
+                    <Input
+                      id="urgentTestUpliftRate"
+                      type="number"
+                      value={pricingSettings.urgentTestUpliftRate}
+                      onChange={(e) => setPricingSettings({ ...pricingSettings, urgentTestUpliftRate: parseFloat(e.target.value) || 0 })}
+                      disabled={!modulePerm.edit}
+                    />
+                    <div className="text-xs text-muted-foreground mt-1">
+                      Applied on top of base test price when test type is marked Urgent.
+                    </div>
+                  </div>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="bulkDiscountRate">Discount (%)</Label>
@@ -488,6 +642,7 @@ const Settings = () => {
                     type="number"
                     value={pricingSettings.bulkDiscountRate}
                     onChange={(e) => setPricingSettings({...pricingSettings, bulkDiscountRate: parseFloat(e.target.value) || 0})}
+                    disabled={!modulePerm.edit}
                   />
                 </div>
               </div>
@@ -528,15 +683,22 @@ const Settings = () => {
               </div>
 
               <div className="flex gap-4 flex-wrap">
-                <Button variant="secondary" onClick={handleSelectedDateBackup}>Selected Date Backup</Button>
-                <Button onClick={handleManualBackup}>Run Manual Backup</Button>
-                <Button variant="destructive" onClick={handleDeleteAll}>Delete All Data</Button>
-                <Button variant="secondary" onClick={() => fileRef.current?.click()}>Import Backup</Button>
+                <Button variant="secondary" disabled={!modulePerm.edit} onClick={handleSelectedDateBackup}>Selected Date Backup</Button>
+                <Button disabled={!modulePerm.edit} onClick={handleManualBackup}>Run Manual Backup</Button>
+                <Button variant="destructive" disabled={!modulePerm.delete} onClick={handleDeleteAll}>Delete All Data</Button>
+                <Button variant="secondary" disabled={!modulePerm.edit} onClick={() => {
+                  if (!modulePerm.edit) {
+                    toast({ title: 'Not allowed', description: 'You only have view permission for Settings.', variant: 'destructive' });
+                    return;
+                  }
+                  fileRef.current?.click();
+                }}>Import Backup</Button>
                 <input
                   ref={fileRef}
                   type="file"
                   accept="application/json"
                   className="hidden"
+                  disabled={!modulePerm.edit}
                   onChange={handleImportBackup}
                 />
               </div>
@@ -548,7 +710,7 @@ const Settings = () => {
 
       {/* Save Button */}
       <div className="flex justify-end">
-        <Button className="gap-2" onClick={handleSaveAll}>
+        <Button className="gap-2" disabled={!modulePerm.edit} onClick={handleSaveAll}>
           <Save className="w-4 h-4" />
           Save All Changes
         </Button>

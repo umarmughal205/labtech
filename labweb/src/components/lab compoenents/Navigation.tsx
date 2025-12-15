@@ -32,8 +32,7 @@ import {
   ChevronDown,
   Truck,
   Microscope,
-  LayoutDashboard,
-  History
+  LayoutDashboard
 } from "lucide-react";
 
 interface MenuItem {
@@ -94,6 +93,67 @@ const Navigation: React.FC<NavigationProps> = ({
   const { state } = useSidebar();
   const isCollapsed = state === "collapsed";
 
+  const isAdminUser = (): boolean => {
+    try {
+      const raw = typeof window !== 'undefined' ? localStorage.getItem('role') : null;
+      const role = String(raw || '').trim().toLowerCase();
+      return new Set(['admin', 'administrator', 'lab supervisor', 'lab-supervisor', 'supervisor']).has(role);
+    } catch {
+      return false;
+    }
+  };
+
+  const getAllowedPermissionNames = (): Set<string> => {
+    try {
+      if (isAdminUser()) return new Set();
+      const raw = typeof window !== 'undefined' ? localStorage.getItem('permissions') : null;
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (!Array.isArray(parsed)) return new Set();
+      return new Set(
+        parsed
+          .filter((p: any) => p && p.view)
+          .map((p: any) => String(p.name || '').trim().toLowerCase())
+          .filter(Boolean)
+      );
+    } catch {
+      return new Set();
+    }
+  };
+
+  const permissionNameForView = (viewId: string): string | null => {
+    const map: Record<string, string> = {
+      'dashboard': 'Dashboard',
+      'test-catalog': 'Test Catalog',
+      'sample-intake': 'Sample Intake',
+      'sample-tracking': 'Sample Tracking',
+      'samples': 'Samples',
+      'barcodes': 'Barcodes',
+      'result-entry': 'Result Entry',
+      'report-designer': 'Report Designer',
+      'report-generator': 'Report Generator',
+      'inventory': 'Inventory',
+      'appointments': 'Appointments',
+      'appointments-history': 'Appointments History',
+      'suppliers': 'Suppliers',
+      'staff-attendance': 'Staff Attendance',
+      'notifications': 'Notifications',
+      'settings': 'Settings',
+      'finance': 'Finance',
+      'ledger': 'Financial Ledger',
+      'expenses': 'Expenses',
+      'user-management': 'User Management',
+      'reports': 'Reports',
+    };
+    return map[String(viewId)] || null;
+  };
+
+  const isReportsAllowed = (allowed: Set<string>): boolean => {
+    return (
+      allowed.has('report designer') ||
+      allowed.has('report generator')
+    );
+  };
+
   const getMenuItems = (): MenuItem[] => {
     // Full catalog of possible items
     const allItems: MenuItem[] = [
@@ -106,7 +166,6 @@ const Navigation: React.FC<NavigationProps> = ({
       { id: "reports", label: "Reports", icon: FileText },
       { id: "inventory" as CurrentView, label: "Inventory", icon: Package },
       { id: "suppliers" as CurrentView, label: "Suppliers", icon: Truck },
-      { id: "purchase-history" as CurrentView, label: "Purchase History", icon: History },
       { id: "staff-attendance" as CurrentView, label: "Staff Attendance", icon: UserCheck },
       { id: "user-management" as CurrentView, label: "User Management", icon: UserCircle },
       { id: "notifications" as CurrentView, label: "Notifications", icon: Bell },
@@ -138,7 +197,20 @@ const Navigation: React.FC<NavigationProps> = ({
 
     // lab-technician: no hidden items
     const hiddenForNow: CurrentView[] = [];
-    return allItems.filter(i => !hiddenForNow.includes(i.id as CurrentView));
+    const base = allItems.filter(i => !hiddenForNow.includes(i.id as CurrentView));
+
+    const allowed = getAllowedPermissionNames();
+    if (allowed.size === 0) return base;
+
+    return base.filter((i) => {
+      if (String(i.id) === 'reports') {
+        return isReportsAllowed(allowed);
+      }
+
+      const required = permissionNameForView(String(i.id));
+      if (!required) return false;
+      return allowed.has(String(required).trim().toLowerCase());
+    });
   };
 
   const navigate = useNavigate();
@@ -172,11 +244,6 @@ const Navigation: React.FC<NavigationProps> = ({
       <div className="flex flex-col space-y-1 w-full">
         {menuItems.map((item) => {
           const Icon = item.icon;
-
-          // Hide standalone top-level Purchase History item (now under Suppliers submenu)
-          if (item.id === "purchase-history") {
-            return null;
-          }
 
           // Custom rendering for Appointments with collapsible submenu
           if (item.id === "appointments") {
@@ -294,14 +361,6 @@ const Navigation: React.FC<NavigationProps> = ({
                       onClick={() => onViewChange("suppliers")}
                     >
                       <span>Suppliers</span>
-                    </Button>
-                    <Button
-                      variant={currentView === "purchase-history" ? "default" : "ghost"}
-                      size="sm"
-                      className="flex items-center justify-start text-sm"
-                      onClick={() => onViewChange("purchase-history")}
-                    >
-                      <span>Purchase History</span>
                     </Button>
                   </div>
                 )}

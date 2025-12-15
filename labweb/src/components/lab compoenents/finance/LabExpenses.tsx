@@ -6,6 +6,36 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Download, DollarSign, Filter, Search } from "lucide-react";
 import { getExpenseEntries, addLedgerEntry } from "@/components/lab compoenents/finance/labFinanceStore";
+import { useToast } from "@/hooks/use-toast";
+
+function getModulePermission(moduleName: string): { view: boolean; edit: boolean; delete: boolean } {
+  try {
+    const roleRaw = typeof window !== 'undefined' ? window.localStorage.getItem('role') : null;
+    const role = String(roleRaw || '').trim().toLowerCase();
+    const isAdmin = new Set(['admin', 'administrator', 'lab supervisor', 'lab-supervisor', 'supervisor']).has(role);
+    if (isAdmin) {
+      return { view: true, edit: true, delete: true };
+    }
+    const raw = typeof window !== 'undefined' ? window.localStorage.getItem('permissions') : null;
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (!Array.isArray(parsed)) {
+      return { view: true, edit: true, delete: true };
+    }
+
+    const wanted = String(moduleName || '').trim().toLowerCase();
+    const found = parsed.find((p: any) => String(p?.name || '').trim().toLowerCase() === wanted);
+    if (!found) {
+      return { view: true, edit: false, delete: false };
+    }
+    return {
+      view: !!found.view,
+      edit: !!found.edit,
+      delete: !!found.delete,
+    };
+  } catch {
+    return { view: true, edit: true, delete: true };
+  }
+}
 
 interface ExpenseRecord {
   id: string;
@@ -25,6 +55,8 @@ const categories = [
 ];
 
 const LabExpenses = () => {
+  const { toast } = useToast();
+  const modulePerm = getModulePermission('Expenses');
   const [expenses, setExpenses] = useState<ExpenseRecord[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
@@ -85,6 +117,10 @@ const LabExpenses = () => {
   };
 
   const addExpense = async () => {
+    if (!modulePerm.edit) {
+      toast({ title: 'Not allowed', description: 'You only have view permission for Expenses.', variant: 'destructive' });
+      return;
+    }
     if (!newExpense.description || !newExpense.amount) return;
     const created = addLedgerEntry({
       type: "expense",
@@ -118,7 +154,18 @@ const LabExpenses = () => {
           <Button variant="outline" onClick={exportCsv}><Download className="w-4 h-4 mr-2"/>Export</Button>
           <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
             <DialogTrigger asChild>
-              <Button><DollarSign className="w-4 h-4 mr-2"/>Add Expense</Button>
+              <Button
+                disabled={!modulePerm.edit}
+                onClick={(e) => {
+                  if (!modulePerm.edit) {
+                    e.preventDefault();
+                    toast({ title: 'Not allowed', description: 'You only have view permission for Expenses.', variant: 'destructive' });
+                    return;
+                  }
+                }}
+              >
+                <DollarSign className="w-4 h-4 mr-2"/>Add Expense
+              </Button>
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
@@ -142,7 +189,7 @@ const LabExpenses = () => {
               </div>
               <DialogFooter>
                 <Button variant="outline" onClick={()=>setIsAddOpen(false)}>Cancel</Button>
-                <Button onClick={addExpense}>Save</Button>
+                <Button disabled={!modulePerm.edit} onClick={addExpense}>Save</Button>
               </DialogFooter>
             </DialogContent>
           </Dialog>

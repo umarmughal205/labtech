@@ -28,22 +28,66 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { 
-  Search, 
-  Filter, 
-  Eye, 
-  BarChart3, 
-  X,
-  Printer,
-  Download
-} from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { 
+  Search, 
+  Filter, 
+  X,
+  Download,
+  ChevronDown,
+} from "lucide-react";
 import { api } from "@/lab lib/api";
+
+function splitCommaOutsideParens(input: string): string[] {
+  const out: string[] = [];
+  let buf = '';
+  let depth = 0;
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+    if (ch === '(') depth++;
+    if (ch === ')' && depth > 0) depth--;
+    if (ch === ',' && depth === 0) {
+      const v = buf.trim();
+      if (v) out.push(v);
+      buf = '';
+      continue;
+    }
+    buf += ch;
+  }
+  const last = buf.trim();
+  if (last) out.push(last);
+  return out;
+}
+
+function getModulePermission(moduleName: string): { view: boolean; edit: boolean; delete: boolean } {
+  try {
+    const roleRaw = typeof window !== 'undefined' ? window.localStorage.getItem('role') : null;
+    const role = String(roleRaw || '').trim().toLowerCase();
+    const isAdmin = new Set(['admin', 'administrator', 'lab supervisor', 'lab-supervisor', 'supervisor']).has(role);
+    if (isAdmin) {
+      return { view: true, edit: true, delete: true };
+    }
+    const raw = typeof window !== 'undefined' ? window.localStorage.getItem('permissions') : null;
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (!Array.isArray(parsed)) {
+      return { view: true, edit: true, delete: true };
+    }
+    const wanted = String(moduleName || '').trim().toLowerCase();
+    const found = parsed.find((p: any) => String(p?.name || '').trim().toLowerCase() === wanted);
+    if (!found) {
+      return { view: true, edit: false, delete: false };
+    }
+    return { view: !!found.view, edit: !!found.edit, delete: !!found.delete };
+  } catch {
+    return { view: true, edit: true, delete: true };
+  }
+}
 
 function getSampleTestNames(sample: any): string[] {
   try {
@@ -55,10 +99,7 @@ function getSampleTestNames(sample: any): string[] {
       }
     }
     if (typeof sample?.test === "string") {
-      String(sample.test)
-        .split(",")
-        .map((v) => v.trim())
-        .forEach((v) => v && names.push(v));
+      splitCommaOutsideParens(String(sample.test)).forEach((v) => v && names.push(v.trim()));
     }
     const uniq = Array.from(new Set(names.map((s) => s.toLowerCase())));
     return uniq.map((lower) => names.find((n) => n.toLowerCase() === lower) || lower);
@@ -77,10 +118,7 @@ function sampleHasCBC(sample: any): boolean {
       }
     }
     if (typeof sample?.test === "string") {
-      String(sample.test)
-        .split(",")
-        .map((v) => v.trim().toLowerCase())
-        .forEach((v) => v && names.push(v));
+      splitCommaOutsideParens(String(sample.test)).forEach((v) => v && names.push(v.trim().toLowerCase()));
     }
     const lookup = [
       "complete blood count",
@@ -95,6 +133,7 @@ function sampleHasCBC(sample: any): boolean {
 
 const Barcodes: React.FC = () => {
   const { toast } = useToast();
+  const modulePerm = getModulePermission('Barcodes');
   
   // Barcode Management state
   const [searchTerm, setSearchTerm] = useState("");
@@ -105,11 +144,9 @@ const Barcodes: React.FC = () => {
 
   // Modal states
   const [showViewModal, setShowViewModal] = useState(false);
-  const [showReportTrackingModal, setShowReportTrackingModal] = useState(false);
   const [selectedSample, setSelectedSample] = useState<any>(null);
   const [showAddSampleModal, setShowAddSampleModal] = useState(false);
   const [cbcRows, setCbcRows] = useState<Array<{ parameter: string; value: string; unit: string; ref: string; status: string }>>([]);
-  const [showCbcEditor, setShowCbcEditor] = useState<boolean>(false);
   
 
   // New sample form state
@@ -127,9 +164,9 @@ const Barcodes: React.FC = () => {
     const norm: "collected" | "processing" | "completed" =
       raw.includes("complet") ? "completed" : raw.includes("process") ? "processing" : "collected";
     const statusConfig: Record<"collected" | "processing" | "completed", { color: string; text: string }> = {
-      collected: { color: "bg-blue-100 text-blue-800", text: "Collected" },
-      processing: { color: "bg-yellow-100 text-yellow-800", text: "Processing" },
-      completed: { color: "bg-green-100 text-green-800", text: "Completed" },
+      collected: { color: "bg-blue-600 text-white", text: "Collected" },
+      processing: { color: "bg-yellow-600 text-white", text: "Processing" },
+      completed: { color: "bg-green-600 text-white", text: "Completed" },
     };
     const config = statusConfig[norm];
     return (
@@ -278,19 +315,7 @@ const Barcodes: React.FC = () => {
   const handleViewSample = (row: any) => {
     // Pure front-end flow: use the row data only as the current mock sample
     setSelectedSample(row);
-    setShowCbcEditor(false);
     setShowViewModal(true);
-  };
-
-  const handleEditCbc = (row: any) => {
-    setSelectedSample(row);
-    setShowCbcEditor(true);
-    setShowViewModal(true);
-  };
-
-  const handleTrackReport = (sample: any) => {
-    setSelectedSample(sample);
-    setShowReportTrackingModal(true);
   };
 
   useEffect(() => {
@@ -323,113 +348,15 @@ const Barcodes: React.FC = () => {
     }
   }, [showViewModal, selectedSample]);
 
-  const handleSaveCBC = async () => {
-    if (!selectedSample) return;
-    const mapFlags = (s: string) => ({
-      isCritical: s.toLowerCase() === 'critical',
-      isAbnormal: s.toLowerCase() === 'high' || s.toLowerCase() === 'low' || s.toLowerCase() === 'abnormal',
-    });
-    const nextResults = cbcRows.map(r => ({
-      label: r.parameter,
-      value: r.value,
-      unit: r.unit,
-      normalText: r.ref,
-      ...mapFlags(r.status),
-    }));
-
-    try {
-      const sampleId = selectedSample._id || selectedSample.id;
-      if (!sampleId) {
-        throw new Error('Missing sample identifier for CBC save');
-      }
-      const token = localStorage.getItem('token');
-      let updatedFromBackend: any = null;
-
-      try {
-        const { data } = await api.patch(`/labtech/samples/${sampleId}`, {
-          results: nextResults,
-          status: 'completed',
-        }, {
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        });
-        updatedFromBackend = data;
-      } catch (err: any) {
-        if (err?.response?.status === 404) {
-          const altId = (selectedSample as any).sampleNumber || (selectedSample as any).barcode;
-          if (altId && String(altId) !== String(sampleId)) {
-            const { data } = await api.patch(`/labtech/samples/${altId}`, {
-              results: nextResults,
-              status: 'completed',
-            }, {
-              headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-            });
-            updatedFromBackend = data;
-          } else {
-            throw err;
-          }
-        } else {
-          throw err;
-        }
-      }
-
-      // Merge backend response into local samples list
-      setSamples(prev => {
-        return prev.map(s => {
-          const sameId = (s._id && updatedFromBackend._id && s._id === updatedFromBackend._id)
-            || (s.id && updatedFromBackend.id && s.id === updatedFromBackend.id);
-          const sameBarcode = !sameId && s.barcode && (updatedFromBackend.sampleNumber || updatedFromBackend.barcode)
-            ? s.barcode === (updatedFromBackend.sampleNumber || updatedFromBackend.barcode)
-            : false;
-          if (!sameId && !sameBarcode) return s;
-
-          const rawStatus = String(updatedFromBackend.status || '');
-          const normStatus = rawStatus.toLowerCase().includes('complet')
-            ? 'completed'
-            : rawStatus.toLowerCase().includes('process')
-            ? 'processing'
-            : 'collected';
-
-          return {
-            ...s,
-            ...updatedFromBackend,
-            status: normStatus,
-            results: Array.isArray(updatedFromBackend.results) ? updatedFromBackend.results : nextResults,
-          };
-        });
-      });
-
-      // Keep selectedSample in sync
-      setSelectedSample(prev => {
-        if (!prev) return prev;
-        const sameId = (prev._id && updatedFromBackend._id && prev._id === updatedFromBackend._id)
-          || (prev.id && updatedFromBackend.id && prev.id === updatedFromBackend.id);
-        if (!sameId) return prev;
-        return { ...prev, ...updatedFromBackend };
-      });
-
-      try {
-        window.dispatchEvent(new Event('samplesChanged'));
-      } catch {}
-
-      toast({
-        title: 'CBC Updated',
-        description: `Saved ${cbcRows.length} parameters for ${selectedSample.barcode}`,
-      });
-    } catch (err) {
-      console.error('Failed to save CBC to backend', err);
-      toast({
-        title: 'Error',
-        description: 'Failed to save CBC results. Please try again.',
-        variant: 'destructive',
-      });
-    }
-  };
-
   const handleNewSampleChange = (field: keyof typeof newSample, value: string) => {
     setNewSample(prev => ({ ...prev, [field]: value }));
   };
 
   const handleAddSample = () => {
+    if (!modulePerm.edit) {
+      toast({ title: 'Not allowed', description: 'You only have view permission for Barcodes.', variant: 'destructive' });
+      return;
+    }
     const trimmedName = newSample.patientName.trim();
     const trimmedTest = newSample.test.trim();
     const trimmedAnalyzer = newSample.assignedAnalyzer.trim();
@@ -490,58 +417,6 @@ const Barcodes: React.FC = () => {
       collectionTime: "",
     });
     setShowAddSampleModal(false);
-  };
-
-  const generateReportLifecycle = (sample: any) => {
-    const baseTime = new Date();
-    baseTime.setHours(8, 30, 0, 0); // Start at 8:30 AM
-    
-    const lifecycle = [
-      {
-        step: "Report Initiated",
-        person: "Lab Tech Bob Wilson",
-        time: "08:30 AM",
-        completed: true,
-        icon: "initiate"
-      },
-      {
-        step: "Data Processing",
-        person: "Mindray BC 700",
-        time: "08:35 AM",
-        completed: true,
-        icon: "processing"
-      },
-      {
-        step: "Results Analysis",
-        person: "Dr. Sarah Johnson",
-        time: "09:00 AM",
-        completed: sample.status === "processing" || sample.status === "completed",
-        icon: "analysis"
-      },
-      {
-        step: "Report Verification",
-        person: "Dr. Sarah Johnson",
-        time: "09:45 AM",
-        completed: sample.status === "completed",
-        icon: "verification"
-      },
-      {
-        step: "Report Generated",
-        person: "System Generated",
-        time: "10:00 AM",
-        completed: sample.status === "completed",
-        icon: "generated"
-      },
-      {
-        step: "Report Released",
-        person: "",
-        time: "",
-        completed: false,
-        icon: "release"
-      }
-    ];
-
-    return lifecycle;
   };
 
   const generatePatientReport = (sample: any) => {
@@ -864,14 +739,6 @@ const Barcodes: React.FC = () => {
     });
   };
 
-  const handlePrintReport = (sample: any) => {
-    handleDownloadPDF(sample); // Same functionality as PDF for now
-    
-    toast({
-      title: "Report Sent to Printer",
-      description: `Patient report for ${sample.patientName} sent to printer`,
-    });
-  };
 
   const handleEmailReport = (sample: any) => {
     // Simulate email functionality
@@ -942,75 +809,6 @@ Questions? Call +1 (555) 123-4567`;
     });
   };
 
-  const handlePrintBarcode = (sample: any) => {
-    // Generate barcode print content
-    const printContent = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>Barcode - ${sample.barcode}</title>
-        <style>
-          body { 
-            font-family: Arial, sans-serif; 
-            margin: 20px; 
-            text-align: center;
-          }
-          .barcode-container {
-            border: 2px solid #000;
-            padding: 20px;
-            margin: 20px auto;
-            width: 300px;
-            background: white;
-          }
-          .barcode-text {
-            font-family: 'Courier New', monospace;
-            font-size: 24px;
-            font-weight: bold;
-            letter-spacing: 2px;
-            margin: 10px 0;
-          }
-          .patient-info {
-            font-size: 14px;
-            margin: 5px 0;
-          }
-          .test-info {
-            font-size: 12px;
-            color: #666;
-            margin: 5px 0;
-          }
-        </style>
-      </head>
-      <body>
-        <div class="barcode-container">
-          <div class="barcode-text">${sample.barcode}</div>
-          <div class="patient-info"><strong>${sample.patientName}</strong></div>
-          <div class="test-info">${sample.test}</div>
-          <div class="test-info">Analyzer: ${sample.assignedAnalyzer}</div>
-          <div class="test-info">Time: ${sample.collectionTime}</div>
-        </div>
-      </body>
-      </html>
-    `;
-
-    const printWindow = window.open('', '_blank');
-    if (printWindow) {
-      printWindow.document.write(printContent);
-      printWindow.document.close();
-      
-      printWindow.onload = () => {
-        setTimeout(() => {
-          printWindow.print();
-          printWindow.close();
-        }, 500);
-      };
-    }
-
-    toast({
-      title: "Barcode Print",
-      description: `Barcode ${sample.barcode} sent to printer`,
-    });
-  };
-
   const handleExportBarcodes = () => {
     // Export all barcodes as CSV
     const csvContent = [
@@ -1045,6 +843,10 @@ Questions? Call +1 (555) 123-4567`;
     sample: any,
     newStatus: "collected" | "processing" | "completed"
   ) => {
+    if (!modulePerm.edit) {
+      toast({ title: 'Not allowed', description: 'You only have view permission for Barcodes.', variant: 'destructive' });
+      return;
+    }
     const sampleId = sample?._id || sample?.id;
     if (!sampleId) {
       // Do not allow fake UI-only updates for samples that are not from backend
@@ -1058,9 +860,10 @@ Questions? Call +1 (555) 123-4567`;
       return;
     }
 
+    const nowIso = new Date().toISOString();
+
     // Optimistic UI update
     setSamples(prev => {
-      const nowIso = new Date().toISOString();
       return prev.map(s => {
         if ((s as any)._id !== sampleId && (s as any).id !== sampleId) return s;
         const next: any = { ...s, status: newStatus, updatedAt: nowIso };
@@ -1068,6 +871,9 @@ Questions? Call +1 (555) 123-4567`;
           next.processedAt = nowIso;
         }
         if (newStatus === "completed") {
+          if (!next.processedAt) {
+            next.processedAt = nowIso;
+          }
           next.completedAt = nowIso;
         }
         return next;
@@ -1079,7 +885,14 @@ Questions? Call +1 (555) 123-4567`;
 
       const token = localStorage.getItem("token");
       const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
-      const payload = { status: backendStatus, sampleStatus: backendStatus } as any;
+      const payload: any = { status: backendStatus, sampleStatus: backendStatus };
+      if (newStatus === "processing") {
+        payload.processedAt = (sample as any).processedAt || nowIso;
+      }
+      if (newStatus === "completed") {
+        payload.processedAt = (sample as any).processedAt || nowIso;
+        payload.completedAt = nowIso;
+      }
 
       const primaryUrl = `/labtech/samples/${sampleId}`;
       const altId = (sample as any).sampleNumber || (sample as any).barcode;
@@ -1246,41 +1059,92 @@ Questions? Call +1 (555) 123-4567`;
                   <TableRow key={sample.barcode}>
                     <TableCell className="font-medium font-mono">{sample.barcode}</TableCell>
                     <TableCell>{sample.patientName}</TableCell>
-                    <TableCell>{
-                      sample.test || (Array.isArray(sample.tests) ? sample.tests.map((t:any) => (t && (t.name || t.test)) || t).filter(Boolean).join(', ') : '')
-                    }</TableCell>
+                    <TableCell>
+                      {(() => {
+                        const names: string[] = [];
+                        if (Array.isArray((sample as any).tests)) {
+                          for (const t of (sample as any).tests) {
+                            const n = String((t && (t.name || t.test)) || t || '').trim();
+                            if (n) names.push(n);
+                          }
+                        }
+                        if (typeof (sample as any).test === 'string') {
+                          splitCommaOutsideParens(String((sample as any).test)).forEach((v) => v && names.push(v));
+                        }
+                        const uniq = Array.from(new Set(names.map((n) => n.toLowerCase())))
+                          .map((lower) => names.find((n) => n.toLowerCase() === lower) || lower);
+                        const list = uniq.filter(Boolean);
+                        if (list.length === 0) return <span>-</span>;
+                        return (
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="outline" size="sm" className="h-8 px-2">
+                                {list.length} {list.length === 1 ? 'test' : 'tests'}
+                                <ChevronDown className="ml-2 h-4 w-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="start" className="max-h-64 overflow-auto">
+                              {list.map((n, idx) => (
+                                <DropdownMenuItem key={`${n}-${idx}`} onSelect={(e) => e.preventDefault()}>
+                                  {n}
+                                </DropdownMenuItem>
+                              ))}
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        );
+                      })()}
+                    </TableCell>
                     <TableCell>{sample.phone || sample.patientPhone || '-'}</TableCell>
                     <TableCell>{getStatusBadge(sample.status)}</TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2">
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="sm" title="View / Edit report">Report</Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              title="Update status"
+                              disabled={!modulePerm.edit}
+                              className={!modulePerm.edit ? 'opacity-50 cursor-not-allowed' : undefined}
+                              onClick={() => {
+                                if (!modulePerm.edit) {
+                                  toast({ title: 'Not allowed', description: 'You only have view permission for Barcodes.', variant: 'destructive' });
+                                }
+                              }}
+                            >
+                              Update Status
+                            </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => handleViewSample(sample)}>View Report</DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => handleEditCbc(sample)}>Edit CBC Report</DropdownMenuItem>
+                            {(() => {
+                              const raw = String(sample?.status || '').toLowerCase();
+                              const current: "collected" | "processing" | "completed" =
+                                raw.includes('complet') ? 'completed' : raw.includes('process') ? 'processing' : 'collected';
+                              return (
+                                <>
+                                  <DropdownMenuItem
+                                    disabled={!modulePerm.edit || current === 'collected'}
+                                    onClick={() => handleUpdateStatus(sample, 'collected')}
+                                  >
+                                    Collected
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    disabled={!modulePerm.edit || current === 'processing'}
+                                    onClick={() => handleUpdateStatus(sample, 'processing')}
+                                  >
+                                    Processing
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    disabled={!modulePerm.edit || current === 'completed'}
+                                    onClick={() => handleUpdateStatus(sample, 'completed')}
+                                  >
+                                    Completed
+                                  </DropdownMenuItem>
+                                </>
+                              );
+                            })()}
                           </DropdownMenuContent>
                         </DropdownMenu>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="sm" title="Update status">Status</Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => handleUpdateStatus(sample, "collected")}>Collected</DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => handleUpdateStatus(sample, "processing")}>Processing</DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => handleUpdateStatus(sample, "completed")}>Completed</DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                        <Button 
-                          variant="ghost" 
-                          size="sm"
-                          onClick={() => handlePrintReport(sample)}
-                          title="Print patient report"
-                        >
-                          <Printer className="h-4 w-4 mr-1" />
-                          Print
-                        </Button>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -1367,7 +1231,7 @@ Questions? Call +1 (555) 123-4567`;
             >
               Cancel
             </Button>
-            <Button type="button" onClick={handleAddSample}>
+            <Button type="button" onClick={handleAddSample} disabled={!modulePerm.edit}>
               Save Sample
             </Button>
           </DialogFooter>
@@ -1397,14 +1261,6 @@ Questions? Call +1 (555) 123-4567`;
                     <Button 
                       variant="outline" 
                       size="sm"
-                      onClick={() => handlePrintReport(selectedSample)}
-                    >
-                      <Printer className="h-4 w-4 mr-2" />
-                      Print
-                    </Button>
-                    <Button 
-                      variant="outline" 
-                      size="sm"
                       onClick={() => handleEmailReport(selectedSample)}
                     >
                       Email
@@ -1418,68 +1274,6 @@ Questions? Call +1 (555) 123-4567`;
                     </Button>
                   </div>
                 </div>
-
-                {/* CBC Manual Edit (visible only when launched via Edit) */}
-                {showCbcEditor && (
-                  <div className="p-4 border-b space-y-3">
-                    <div className="flex items-center justify-between">
-                      <h3 className="text-sm font-medium">Complete Blood Count (CBC) - Edit</h3>
-                      <Button size="sm" onClick={handleSaveCBC}>Save CBC</Button>
-                    </div>
-                    <div className="border rounded-md overflow-hidden">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>Test Parameter</TableHead>
-                            <TableHead>Result</TableHead>
-                            <TableHead>Unit</TableHead>
-                            <TableHead>Reference Range</TableHead>
-                            <TableHead>Status</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {cbcRows.map((row, idx) => (
-                            <TableRow key={idx}>
-                              <TableCell className="min-w-[180px]">
-                                <Input value={row.parameter} onChange={(e) => {
-                                  const v = e.target.value; setCbcRows(prev => prev.map((r, i) => i === idx ? { ...r, parameter: v } : r));
-                                }} />
-                              </TableCell>
-                              <TableCell className="w-[120px]">
-                                <Input value={row.value} onChange={(e) => {
-                                  const v = e.target.value; setCbcRows(prev => prev.map((r, i) => i === idx ? { ...r, value: v } : r));
-                                }} />
-                              </TableCell>
-                              <TableCell className="w-[120px]">
-                                <Input value={row.unit} onChange={(e) => {
-                                  const v = e.target.value; setCbcRows(prev => prev.map((r, i) => i === idx ? { ...r, unit: v } : r));
-                                }} />
-                              </TableCell>
-                              <TableCell className="min-w-[160px]">
-                                <Input value={row.ref} onChange={(e) => {
-                                  const v = e.target.value; setCbcRows(prev => prev.map((r, i) => i === idx ? { ...r, ref: v } : r));
-                                }} />
-                              </TableCell>
-                              <TableCell className="w-[140px]">
-                                <Select value={row.status} onValueChange={(v) => setCbcRows(prev => prev.map((r, i) => i === idx ? { ...r, status: v } : r))}>
-                                  <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="Normal">Normal</SelectItem>
-                                    <SelectItem value="High">High</SelectItem>
-                                    <SelectItem value="Low">Low</SelectItem>
-                                    <SelectItem value="Average">Average</SelectItem>
-                                    <SelectItem value="Critical">Critical</SelectItem>
-                                    <SelectItem value="Abnormal">Abnormal</SelectItem>
-                                  </SelectContent>
-                                </Select>
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </div>
-                  </div>
-                )}
 
                 {/* Report Content */}
                 <div className="p-6 space-y-6">
@@ -1604,114 +1398,6 @@ Questions? Call +1 (555) 123-4567`;
                   <div className="text-center text-xs text-gray-500 pt-4 border-t">
                     <p>This is a computer-generated report and does not require a physical signature.</p>
                     <p>For queries, contact: lab@medlablis.com | +1 (555) 123-4567</p>
-                  </div>
-                </div>
-              </div>
-            );
-          })()}
-        </DialogContent>
-      </Dialog>
-
-      {/* Report Tracking Modal */}
-      <Dialog open={showReportTrackingModal} onOpenChange={setShowReportTrackingModal}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
-          {selectedSample && (() => {
-            const lifecycle = generateReportLifecycle(selectedSample);
-            return (
-              <div className="bg-white">
-                {/* Header */}
-                <div className="p-6 border-b">
-                  <h2 className="text-2xl font-bold text-gray-900">Report Tracking</h2>
-                  <p className="text-gray-600 mt-1">Sample ID: {selectedSample.barcode}</p>
-                </div>
-
-                {/* Content */}
-                <div className="p-6 space-y-6">
-                  {/* Sample Information */}
-                  <div className="bg-gray-50 p-4 rounded-lg">
-                    <h3 className="text-lg font-semibold text-gray-900 mb-4">Sample Information</h3>
-                    <div className="grid grid-cols-4 gap-4 text-sm">
-                      <div>
-                        <span className="font-medium text-gray-500">Patient</span>
-                        <p className="text-gray-900">{selectedSample.patientName}</p>
-                      </div>
-                      <div>
-                        <span className="font-medium text-gray-500">Test Type</span>
-                        <p className="text-gray-900">{selectedSample.test}</p>
-                      </div>
-                      <div>
-                        <span className="font-medium text-gray-500">Analyzer</span>
-                        <p className="text-gray-900">{selectedSample.assignedAnalyzer}</p>
-                      </div>
-                      <div>
-                        <span className="font-medium text-gray-500">Status</span>
-                        <div className="mt-1">
-                          <Badge className={`${selectedSample.status === 'completed' ? 'bg-green-100 text-green-800' : 
-                                                selectedSample.status === 'in process' ? 'bg-blue-100 text-blue-800' :
-                                                selectedSample.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
-                                                'bg-red-100 text-red-800'} text-xs capitalize`}>
-                            {selectedSample.status}
-                          </Badge>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Report Lifecycle Timeline */}
-                  <div>
-                    <h3 className="text-lg font-semibold text-gray-900 mb-4">Report Lifecycle Timeline</h3>
-                    <div className="relative">
-                      {/* Timeline line */}
-                      <div className="absolute left-6 top-0 bottom-0 w-0.5 bg-gray-200"></div>
-                      
-                      {/* Timeline items */}
-                      <div className="space-y-6">
-                        {lifecycle.map((item, index) => (
-                          <div key={index} className="relative flex items-start">
-                            {/* Timeline dot */}
-                            <div className={`relative z-10 flex items-center justify-center w-12 h-12 rounded-full border-2 ${
-                              item.completed 
-                                ? 'bg-blue-600 border-blue-600' 
-                                : 'bg-gray-200 border-gray-300'
-                            }`}>
-                              <div className={`w-6 h-6 rounded-full flex items-center justify-center ${
-                                item.completed ? 'bg-white' : 'bg-gray-400'
-                              }`}>
-                                <div className={`w-2 h-2 rounded-full ${
-                                  item.completed ? 'bg-blue-600' : 'bg-gray-600'
-                                }`}></div>
-                              </div>
-                            </div>
-                            
-                            {/* Content */}
-                            <div className="ml-6 flex-1">
-                              <div className="flex items-center justify-between">
-                                <div>
-                                  <h4 className={`text-base font-medium ${
-                                    item.completed ? 'text-gray-900' : 'text-gray-500'
-                                  }`}>
-                                    {item.step}
-                                  </h4>
-                                  {item.person && (
-                                    <p className={`text-sm ${
-                                      item.completed ? 'text-gray-600' : 'text-gray-400'
-                                    }`}>
-                                      {item.person}
-                                    </p>
-                                  )}
-                                </div>
-                                {item.time && (
-                                  <div className="flex items-center text-sm text-gray-500">
-                                    <span className="mr-1">🕐</span>
-                                    {item.time}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
                   </div>
                 </div>
               </div>

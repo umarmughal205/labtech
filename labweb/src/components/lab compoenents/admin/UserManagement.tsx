@@ -16,6 +16,37 @@ import {
 import { Plus, Edit, Trash2, User, Lock, Mail, UserCog, X, Eye, EyeOff } from 'lucide-react';
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import { api } from "@/lib/api";
+import { useToast } from "@/hooks/use-toast";
+
+function getModulePermission(moduleName: string): { view: boolean; edit: boolean; delete: boolean } {
+  try {
+    const roleRaw = typeof window !== 'undefined' ? window.localStorage.getItem('role') : null;
+    const role = String(roleRaw || '').trim().toLowerCase();
+    const isAdmin = new Set(['admin', 'administrator', 'lab supervisor', 'lab-supervisor', 'supervisor']).has(role);
+    if (isAdmin) {
+      return { view: true, edit: true, delete: true };
+    }
+    const raw = typeof window !== 'undefined' ? window.localStorage.getItem('permissions') : null;
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (!Array.isArray(parsed)) {
+      return { view: true, edit: true, delete: true };
+    }
+
+    const wanted = String(moduleName || '').trim().toLowerCase();
+    const found = parsed.find((p: any) => String(p?.name || '').trim().toLowerCase() === wanted);
+    if (!found) {
+      return { view: true, edit: false, delete: false };
+    }
+    return {
+      view: !!found.view,
+      edit: !!found.edit,
+      delete: !!found.delete,
+    };
+  } catch {
+    return { view: true, edit: true, delete: true };
+  }
+}
 
 type UserRole = string;
 
@@ -45,22 +76,48 @@ interface Role {
 // Modules available for permissions
 const PERMISSION_MODULES: string[] = [
   'Dashboard',
+  'Test Catalog',
+  'Sample Intake',
   'Samples',
-  'Patients',
-  'Analyzer Results',
-  'QC Management',
-  'Reports',
+  'Sample Tracking',
+  'Barcodes',
+  'Result Entry',
+  'Report Designer',
+  'Report Generator',
+  'Inventory',
+  'Suppliers',
+  'Staff Attendance',
   'User Management',
+  'Notifications',
   'Settings',
+  'Finance',
+  'Financial Ledger',
+  'Expenses',
 ];
 
 const UserManagement: React.FC = () => {
+  const { toast } = useToast();
+  const modulePerm = getModulePermission('User Management');
   // State for users, roles and per-user permissions
   const [users, setUsers] = useState<User[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
   const [selectedRoleId, setSelectedRoleId] = useState<string>(''); // holds selected user id in User Permissions section
   const [userPermissions, setUserPermissions] = useState<Record<string, Permission[]>>({});
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [roleError, setRoleError] = useState<string>('');
+  const [confirmDialog, setConfirmDialog] = useState<{
+    open: boolean;
+    title: string;
+    description: string;
+    confirmLabel: string;
+    onConfirm: (() => void) | null;
+  }>({
+    open: false,
+    title: '',
+    description: '',
+    confirmLabel: 'Confirm',
+    onConfirm: null,
+  });
   
   // State for modals
   const [isUserModalOpen, setIsUserModalOpen] = useState<boolean>(false);
@@ -78,33 +135,85 @@ const UserManagement: React.FC = () => {
 
   // Fetch initial data from localStorage instead of mock arrays
   useEffect(() => {
-    try {
-      const storedUsers = localStorage.getItem('labUsers');
-      const storedRoles = localStorage.getItem('labRoles');
-      const parsedUsers: User[] = storedUsers ? JSON.parse(storedUsers) : [];
-      const parsedRoles: Role[] = storedRoles ? JSON.parse(storedRoles) : [];
+    let cancelled = false;
+    const load = async () => {
+      setIsLoading(true);
+      try {
+        const [usersResp, rolesResp] = await Promise.all([
+          api.get('/admin/users'),
+          api.get('/admin/roles'),
+        ]);
 
-      setUsers(Array.isArray(parsedUsers) ? parsedUsers : []);
-      setRoles(Array.isArray(parsedRoles) ? parsedRoles : []);
-      setSelectedRoleId('');
-    } catch (error) {
-      console.error('Error loading user/role data from storage:', error);
-      setUsers([]);
-      setRoles([]);
-      setSelectedRoleId('');
-    } finally {
-      setIsLoading(false);
-    }
+        if (cancelled) return;
+
+        const fetchedUsers: User[] = Array.isArray(usersResp.data)
+          ? usersResp.data.map((u: any) => ({
+              id: String(u._id || u.id || ''),
+              name: String(u.name || ''),
+              email: String(u.email || ''),
+              role: String(u.role || ''),
+              status: (String(u.status || 'Active') as any) === 'Inactive' ? 'Inactive' : 'Active',
+              lastLogin: u.lastLogin ? new Date(u.lastLogin).toLocaleString() : '',
+            }))
+          : [];
+
+        const fetchedRoles: Role[] = Array.isArray(rolesResp.data)
+          ? rolesResp.data.map((r: any) => ({
+              id: String(r._id || r.id || ''),
+              name: String(r.name || ''),
+              permissions: Array.isArray(r.permissions)
+                ? r.permissions.map((p: any, idx: number) => ({
+                    id: `${r._id || r.id}-${idx}-${p?.name || idx}`,
+                    name: String(p?.name || ''),
+                    view: !!p?.view,
+                    edit: !!p?.edit,
+                    delete: !!p?.delete,
+                  }))
+                : [],
+            }))
+          : [];
+
+        const fetchedUserPermissions: Record<string, Permission[]> = {};
+        if (Array.isArray(usersResp.data)) {
+          for (const u of usersResp.data) {
+            const uid = String(u._id || u.id || '');
+            if (!uid) continue;
+            fetchedUserPermissions[uid] = Array.isArray(u.permissions)
+              ? u.permissions.map((p: any, idx: number) => ({
+                  id: `${uid}-${idx}-${p?.name || idx}`,
+                  name: String(p?.name || ''),
+                  view: !!p?.view,
+                  edit: !!p?.edit,
+                  delete: !!p?.delete,
+                }))
+              : [];
+          }
+        }
+
+        setUsers(fetchedUsers);
+        setRoles(fetchedRoles);
+        setUserPermissions(fetchedUserPermissions);
+        setSelectedRoleId('');
+      } catch (error) {
+        console.error('Error loading user/role data:', error);
+        setUsers([]);
+        setRoles([]);
+        setUserPermissions({});
+        setSelectedRoleId('');
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    };
+
+    load();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Persist users and roles to localStorage whenever they change so they act as mock data
   useEffect(() => {
-    try {
-      localStorage.setItem('labUsers', JSON.stringify(users));
-      localStorage.setItem('labRoles', JSON.stringify(roles));
-    } catch {
-      // ignore storage errors
-    }
+    // no-op (backend-driven)
   }, [users, roles]);
 
   // Handle user form changes
@@ -115,6 +224,10 @@ const UserManagement: React.FC = () => {
 
   // Handle permission toggle
   const handlePermissionToggle = (permissionId: string, field: 'view' | 'edit' | 'delete') => {
+    if (!modulePerm.edit) {
+      toast({ title: 'Not allowed', description: 'You only have view permission for User Management.', variant: 'destructive' });
+      return;
+    }
     setRoles(prevRoles => {
       return prevRoles.map(role => {
         if (role.id === selectedRoleId) {
@@ -135,6 +248,10 @@ const UserManagement: React.FC = () => {
 
   // Handle toggles directly in the User Permissions table (per-user)
   const handleUserPermissionToggle = (userId: string, permissionName: string, field: 'view' | 'edit' | 'delete') => {
+    if (!modulePerm.edit) {
+      toast({ title: 'Not allowed', description: 'You only have view permission for User Management.', variant: 'destructive' });
+      return;
+    }
     setUserPermissions(prev => {
       const existing = prev[userId] || [];
       const found = existing.find((p) => p.name === permissionName);
@@ -153,7 +270,7 @@ const UserManagement: React.FC = () => {
         [userId]: [
           ...existing,
           {
-            id: Math.random().toString(36).substr(2, 9),
+            id: `${userId}-${permissionName}`,
             name: permissionName,
             view: field === 'view',
             edit: field === 'edit',
@@ -165,40 +282,68 @@ const UserManagement: React.FC = () => {
   };
 
   // Handle user form submission
-  const handleUserSubmit = (e: React.FormEvent) => {
+  const handleUserSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    if (userForm.id) {
-      // Update existing user
-      setUsers(prevUsers => 
-        prevUsers.map(user => 
-          user.id === userForm.id 
-            ? { 
-                ...user, 
-                name: userForm.name || '',
-                email: userForm.email || '',
-                role: userForm.role || 'Lab Technician',
-                status: userForm.status || 'Active'
-              } 
-            : user
-        )
-      );
-    } else {
-      // Create new user
-      const newUser: User = {
-        id: Math.random().toString(36).substr(2, 9), // Generate a simple ID
-        name: userForm.name || '',
-        email: userForm.email || '',
-        role: userForm.role || 'Lab Technician',
-        status: 'Active',
-        lastLogin: 'Just now'
-      };
-      setUsers(prevUsers => [...prevUsers, newUser]);
+
+    if (!modulePerm.edit) {
+      toast({ title: 'Not allowed', description: 'You only have view permission for User Management.', variant: 'destructive' });
+      return;
+    }
+
+    try {
+      if (userForm.id) {
+        const resp = await api.put(`/admin/users/${userForm.id}`,
+          {
+            name: userForm.name,
+            email: userForm.email,
+            role: userForm.role,
+            status: userForm.status,
+          }
+        );
+        const u = resp.data;
+        const updatedUser: User = {
+          id: String(u._id || userForm.id),
+          name: String(u.name || ''),
+          email: String(u.email || ''),
+          role: String(u.role || ''),
+          status: (String(u.status || 'Active') as any) === 'Inactive' ? 'Inactive' : 'Active',
+          lastLogin: u.lastLogin ? new Date(u.lastLogin).toLocaleString() : '',
+        };
+        setUsers(prevUsers => prevUsers.map(user => user.id === updatedUser.id ? updatedUser : user));
+      } else {
+        const resp = await api.post('/admin/users',
+          {
+            name: userForm.name,
+            email: userForm.email,
+            role: userForm.role || 'Lab Technician',
+            password: userForm.password,
+            status: userForm.status || 'Active',
+          }
+        );
+        const u = resp.data;
+        const newUser: User = {
+          id: String(u._id),
+          name: String(u.name || ''),
+          email: String(u.email || ''),
+          role: String(u.role || ''),
+          status: (String(u.status || 'Active') as any) === 'Inactive' ? 'Inactive' : 'Active',
+          lastLogin: u.lastLogin ? new Date(u.lastLogin).toLocaleString() : '',
+        };
+        setUsers(prevUsers => [newUser, ...prevUsers]);
+      }
+
+      setRoleError('');
+      // Reset form and close modal (no auto-filled values)
+      setUserForm({ name: '', email: '', role: '', password: '', status: 'Active' });
+      setIsUserModalOpen(false);
+    } catch (e) {
+      const err: any = e;
+      const status = err?.response?.status;
+      const message = err?.response?.data?.message || err?.message || 'Failed to save user';
+      setRoleError(status ? `${status}: ${message}` : String(message));
+      console.error('Failed to save user', e);
     }
     
-    // Reset form and close modal (no auto-filled values)
-    setUserForm({ name: '', email: '', role: '', password: '', status: 'Active' });
-    setIsUserModalOpen(false);
   };
 
   // State for role form
@@ -214,69 +359,177 @@ const UserManagement: React.FC = () => {
     setRoleForm(prev => ({ ...prev, [name]: value }));
   };
 
-  // Handle role form submission
-  const handleRoleSubmit = (e: React.FormEvent) => {
+  // Handle role form submission (persist permissions)
+  const handleRoleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    if (roleForm.id) {
-      // Update existing role (for global role management / Add User role list)
-      setRoles(prevRoles => 
-        prevRoles.map(role => 
-          role.id === roleForm.id 
-            ? { 
-                ...role, 
-                name: roleForm.name || '',
-                permissions: roleForm.permissions || []
-              } 
-            : role
-        )
-      );
-    } else {
-      // Create new role (used for Add User role dropdown and global roles)
-      const newRole: Role = {
-        id: Math.random().toString(36).substr(2, 9),
-        name: roleForm.name || 'New Role',
-        permissions: roleForm.permissions || []
-      };
-      setRoles(prevRoles => [...prevRoles, newRole]);
 
-      // If Add User dialog is open, auto-select the newly created role
-      if (isUserModalOpen) {
-        setUserForm(prev => ({
-          ...prev,
-          role: newRole.name as UserRole,
-        }));
-      }
+    if (!modulePerm.edit) {
+      toast({ title: 'Not allowed', description: 'You only have view permission for User Management.', variant: 'destructive' });
+      return;
     }
 
-    // Also store permissions for the currently selected user in the User Permissions section
-    if (selectedRoleId) {
-      const userForPermissions = users.find((u) => u.id === selectedRoleId);
-      if (userForPermissions) {
+    try {
+      // If permissions modal is used for a user, persist user permissions instead of roles
+      if (selectedUser && !roleForm.id) {
+        const payload = (roleForm.permissions || []).map((p: any) => ({
+          name: p.name,
+          view: !!p.view,
+          edit: !!p.edit,
+          delete: !!p.delete,
+        }));
+        const resp = await api.put(`/admin/users/${selectedUser.id}/permissions`, { permissions: payload });
+        const updated = resp.data;
         setUserPermissions(prev => ({
           ...prev,
-          [userForPermissions.id]: roleForm.permissions || [],
+          [selectedUser.id]: (Array.isArray(updated.permissions) ? updated.permissions : []).map((p: any, idx: number) => ({
+            id: `${updated._id}-${idx}-${p.name}`,
+            name: String(p.name || ''),
+            view: !!p.view,
+            edit: !!p.edit,
+            delete: !!p.delete,
+          })),
         }));
+      } else {
+        // Persist role permissions
+        const permsPayload = (roleForm.permissions || []).map((p: any) => ({
+          name: p.name,
+          view: !!p.view,
+          edit: !!p.edit,
+          delete: !!p.delete,
+        }));
+
+        if (roleForm.id) {
+          const resp = await api.put(`/admin/roles/${roleForm.id}`, {
+            name: roleForm.name || '',
+            permissions: permsPayload,
+          });
+          const r = resp.data;
+          setRoles(prev => prev.map(role => role.id === roleForm.id ? {
+            id: String(r._id),
+            name: String(r.name || ''),
+            permissions: Array.isArray(r.permissions)
+              ? r.permissions.map((p: any, idx: number) => ({
+                  id: `${r._id}-${idx}`,
+                  name: String(p.name || ''),
+                  view: !!p.view,
+                  edit: !!p.edit,
+                  delete: !!p.delete,
+                }))
+              : [],
+          } : role));
+        } else {
+          const resp = await api.post('/admin/roles', {
+            name: roleForm.name || 'New Role',
+            permissions: permsPayload,
+          });
+          const r = resp.data;
+          const newRole: Role = {
+            id: String(r._id),
+            name: String(r.name || ''),
+            permissions: Array.isArray(r.permissions)
+              ? r.permissions.map((p: any, idx: number) => ({
+                  id: `${r._id}-${idx}`,
+                  name: String(p.name || ''),
+                  view: !!p.view,
+                  edit: !!p.edit,
+                  delete: !!p.delete,
+                }))
+              : [],
+          };
+          setRoles(prev => [...prev, newRole]);
+          if (isUserModalOpen) {
+            setUserForm(prev => ({
+              ...prev,
+              role: newRole.name as UserRole,
+            }));
+          }
+        }
       }
+    } catch (err) {
+      console.error('Failed to save role/permissions:', err);
     }
-    
-    // Reset form and close modal
+
     setRoleForm({ id: '', name: '', permissions: [] });
     setIsRoleModalOpen(false);
   };
 
   // Handle role deletion
-  const handleDeleteRole = (roleId: string) => {
-    if (window.confirm('Are you sure you want to delete this role? This action cannot be undone.')) {
-      setRoles(prevRoles => prevRoles.filter(role => role.id !== roleId));
-      if (selectedRoleId === roleId) {
-        setSelectedRoleId('');
-      }
+  const handleDeleteRole = async (roleId: string) => {
+    if (!modulePerm.delete) {
+      toast({ title: 'Not allowed', description: "You don't have delete permission for User Management.", variant: 'destructive' });
+      return;
     }
+    try {
+      await api.delete(`/admin/roles/${roleId}`);
+      setRoles(prevRoles => prevRoles.filter(role => role.id !== roleId));
+      setRoleError('');
+    } catch (e) {
+      const err: any = e;
+      const status = err?.response?.status;
+      const message = err?.response?.data?.message || err?.message || 'Failed to delete role';
+      setRoleError(status ? `${status}: ${message}` : String(message));
+      console.error('Failed to delete role', e);
+    }
+  };
+
+  const requestDeleteRole = (role: Role) => {
+    if (!modulePerm.delete) {
+      toast({ title: 'Not allowed', description: "You don't have delete permission for User Management.", variant: 'destructive' });
+      return;
+    }
+    setConfirmDialog({
+      open: true,
+      title: 'Delete Role',
+      description: `Are you sure you want to delete ${role.name}? This action cannot be undone.`,
+      confirmLabel: 'Delete',
+      onConfirm: () => {
+        handleDeleteRole(role.id);
+      },
+    });
+  };
+
+  const requestDeleteUser = (user: User) => {
+    if (!modulePerm.delete) {
+      toast({ title: 'Not allowed', description: "You don't have delete permission for User Management.", variant: 'destructive' });
+      return;
+    }
+    setConfirmDialog({
+      open: true,
+      title: 'Delete User',
+      description: `Are you sure you want to delete ${user.name}? This action cannot be undone.`,
+      confirmLabel: 'Delete',
+      onConfirm: () => {
+        (async () => {
+          try {
+            await api.delete(`/admin/users/${user.id}`);
+            setUsers(prevUsers => prevUsers.filter(u => u.id !== user.id));
+            setUserPermissions(prev => {
+              const next = { ...prev };
+              delete next[user.id];
+              return next;
+            });
+            if (selectedRoleId === user.id) {
+              setSelectedRoleId('');
+            }
+            setRoleError('');
+          } catch (e) {
+            const err: any = e;
+            const status = err?.response?.status;
+            const message = err?.response?.data?.message || err?.message || 'Failed to delete user';
+            setRoleError(status ? `${status}: ${message}` : String(message));
+            console.error('Failed to delete user', e);
+          }
+        })();
+      },
+    });
   };
 
   // Handle permission toggle for role form
   const handleRolePermissionToggle = (permissionName: string, field: 'view' | 'edit' | 'delete') => {
+    if (!modulePerm.edit) {
+      toast({ title: 'Not allowed', description: 'You only have view permission for User Management.', variant: 'destructive' });
+      return;
+    }
     setRoleForm(prev => {
       const permissions = [...(prev.permissions || [])];
       const existingPermission = permissions.find(p => p.name === permissionName);
@@ -296,7 +549,7 @@ const UserManagement: React.FC = () => {
           permissions: [
             ...permissions,
             { 
-              id: Math.random().toString(36).substr(2, 9),
+              id: `role-${permissionName}`,
               name: permissionName,
               view: field === 'view',
               edit: field === 'edit',
@@ -317,7 +570,7 @@ const UserManagement: React.FC = () => {
         const existing = currentUserPermissions.find((p) => p.name === moduleName);
         return (
           existing || {
-            id: Math.random().toString(36).substr(2, 9),
+            id: `${selectedUser.id}-${moduleName}`,
             name: moduleName,
             view: false,
             edit: false,
@@ -327,15 +580,7 @@ const UserManagement: React.FC = () => {
       })
     : [];
 
-  const roleOptions: string[] = Array.from(
-    new Set([
-      'Lab Supervisor',
-      'Pathologist',
-      'Lab Technician',
-      'Receptionist',
-      ...roles.map((r) => r.name),
-    ])
-  );
+  const roleOptions: string[] = Array.from(new Set(roles.map((r) => r.name).filter(Boolean)));
 
   if (isLoading) {
     return (
@@ -370,27 +615,43 @@ const UserManagement: React.FC = () => {
             <Button
               type="button"
               className="sm:w-auto w-full mt-2 sm:mt-0"
-              onClick={() => {
+              disabled={!modulePerm.edit}
+              onClick={async () => {
+                if (!modulePerm.edit) {
+                  toast({ title: 'Not allowed', description: 'You only have view permission for User Management.', variant: 'destructive' });
+                  return;
+                }
                 const trimmedName = (roleForm.name || '').trim();
                 if (!trimmedName) return;
+                try {
+                  const res = await api.post('/admin/roles', { name: trimmedName, permissions: [] });
+                  const r = res.data;
+                  const newRole: Role = {
+                    id: String(r._id),
+                    name: String(r.name || trimmedName),
+                    permissions: Array.isArray(r.permissions)
+                      ? r.permissions.map((p: any, idx: number) => ({
+                          id: `${r._id}-${idx}`,
+                          name: String(p.name || ''),
+                          view: !!p.view,
+                          edit: !!p.edit,
+                          delete: !!p.delete,
+                        }))
+                      : [],
+                  };
+                  setRoles(prev => [...prev, newRole]);
 
-                const newRole: Role = {
-                  id: Math.random().toString(36).substr(2, 9),
-                  name: trimmedName,
-                  permissions: [],
-                };
+                  if (isUserModalOpen) {
+                    setUserForm(prev => ({
+                      ...prev,
+                      role: newRole.name as UserRole,
+                    }));
+                  }
 
-                setRoles(prev => [...prev, newRole]);
-
-                // If Add User dialog is open, allow selecting this new role
-                if (isUserModalOpen) {
-                  setUserForm(prev => ({
-                    ...prev,
-                    role: trimmedName as UserRole,
-                  }));
+                  setRoleForm(prev => ({ ...prev, id: '', name: '', permissions: [] }));
+                } catch (e) {
+                  console.error('Failed to create role', e);
                 }
-
-                setRoleForm(prev => ({ ...prev, id: '', name: '', permissions: [] }));
               }}
             >
               <Plus className="mr-2 h-4 w-4" /> Add Role
@@ -399,6 +660,9 @@ const UserManagement: React.FC = () => {
 
           <div className="space-y-2">
             <Label>Existing Roles</Label>
+            {roleError ? (
+              <div className="text-sm text-red-600">{roleError}</div>
+            ) : null}
             <div className="border rounded-lg p-4 space-y-2 max-h-40 overflow-y-auto">
               {roles.length > 0 ? (
                 roles.map((role) => (
@@ -407,7 +671,20 @@ const UserManagement: React.FC = () => {
                     className="flex items-center justify-between p-2 rounded border border-dashed"
                   >
                     <span className="font-medium text-sm">{role.name}</span>
-                    <Badge variant="outline" className="text-xs">Role</Badge>
+                    <div className="flex items-center gap-2">
+                      <Badge variant="outline" className="text-xs">Role</Badge>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="text-red-500 hover:bg-red-100 hover:text-red-700"
+                        disabled={!modulePerm.delete}
+                        onClick={() => requestDeleteRole(role)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                        <span className="sr-only">Delete role</span>
+                      </Button>
+                    </div>
                   </div>
                 ))
               ) : (
@@ -427,10 +704,15 @@ const UserManagement: React.FC = () => {
           </div>
           <Button
             onClick={() => {
+              if (!modulePerm.edit) {
+                toast({ title: 'Not allowed', description: 'You only have view permission for User Management.', variant: 'destructive' });
+                return;
+              }
               // Open Add User with empty fields (no auto-filled values)
               setUserForm({ name: '', email: '', role: '', password: '', status: 'Active' });
               setIsUserModalOpen(true);
             }}
+            disabled={!modulePerm.edit}
           >
             <Plus className="mr-2 h-4 w-4" /> Add User
           </Button>
@@ -469,7 +751,12 @@ const UserManagement: React.FC = () => {
                       variant="ghost" 
                       size="icon" 
                       className="mr-2 hover:bg-blue-100"
+                      disabled={!modulePerm.edit}
                       onClick={() => {
+                        if (!modulePerm.edit) {
+                          toast({ title: 'Not allowed', description: 'You only have view permission for User Management.', variant: 'destructive' });
+                          return;
+                        }
                         // Set the form with user data for editing
                         setUserForm({
                           id: user.id,
@@ -489,16 +776,8 @@ const UserManagement: React.FC = () => {
                       variant="ghost" 
                       size="icon" 
                       className="text-red-500 hover:bg-red-100 hover:text-red-700"
-                      onClick={() => {
-                        if (window.confirm(`Are you sure you want to delete ${user.name}? This action cannot be undone.`)) {
-                          // Remove the user from the users array
-                          setUsers(prevUsers => prevUsers.filter(u => u.id !== user.id));
-                          // If the deleted user is currently selected, clear the selection
-                          if (selectedRoleId === user.id) {
-                            setSelectedRoleId('');
-                          }
-                        }
-                      }}
+                      disabled={!modulePerm.delete}
+                      onClick={() => requestDeleteUser(user)}
                     >
                       <Trash2 className="h-4 w-4" />
                       <span className="sr-only">Delete user</span>
@@ -557,11 +836,16 @@ const UserManagement: React.FC = () => {
               </Select>
               <Button 
                 onClick={() => {
+                  if (!modulePerm.edit) {
+                    toast({ title: 'Not allowed', description: 'You only have view permission for User Management.', variant: 'destructive' });
+                    return;
+                  }
                   // Initialize dialog with current user's permissions so it matches the table
                   const permissionsForUser = selectedUser ? (userPermissions[selectedUser.id] || []) : [];
                   setRoleForm({ id: '', name: '', permissions: permissionsForUser });
                   setIsRoleModalOpen(true);
                 }}
+                disabled={!modulePerm.edit || !selectedUser}
               >
                 <UserCog className="mr-2 h-4 w-4" /> Manage Permission
               </Button>
@@ -589,20 +873,21 @@ const UserManagement: React.FC = () => {
                           <Switch
                             checked={permission.view}
                             onCheckedChange={() => selectedUser && handleUserPermissionToggle(selectedUser.id, permission.name, 'view')}
+                            disabled={!modulePerm.edit}
                           />
                         </TableCell>
                         <TableCell className="text-center">
                           <Switch
                             checked={permission.edit}
                             onCheckedChange={() => selectedUser && handleUserPermissionToggle(selectedUser.id, permission.name, 'edit')}
-                            disabled={!permission.view}
+                            disabled={!modulePerm.edit || !permission.view}
                           />
                         </TableCell>
                         <TableCell className="text-center">
                           <Switch
                             checked={permission.delete}
                             onCheckedChange={() => selectedUser && handleUserPermissionToggle(selectedUser.id, permission.name, 'delete')}
-                            disabled={!permission.view || !permission.edit}
+                            disabled={!modulePerm.edit || !permission.view || !permission.edit}
                           />
                         </TableCell>
                       </TableRow>
@@ -611,7 +896,18 @@ const UserManagement: React.FC = () => {
                 </Table>
               </div>
               <div className="flex justify-end">
-                <Button>Save Permissions</Button>
+                <Button
+                  disabled={!modulePerm.edit}
+                  onClick={() => {
+                    if (!modulePerm.edit) {
+                      toast({ title: 'Not allowed', description: 'You only have view permission for User Management.', variant: 'destructive' });
+                      return;
+                    }
+                    toast({ title: 'Saved', description: 'Permissions are saved as you toggle them.' });
+                  }}
+                >
+                  Save Permissions
+                </Button>
               </div>
             </div>
           )}
@@ -622,6 +918,10 @@ const UserManagement: React.FC = () => {
       <Dialog
         open={isRoleModalOpen}
         onOpenChange={(open) => {
+          if (open && !modulePerm.edit) {
+            toast({ title: 'Not allowed', description: 'You only have view permission for User Management.', variant: 'destructive' });
+            return;
+          }
           setIsRoleModalOpen(open);
           if (!open) {
             setRoleForm({ id: '', name: '', permissions: [] });
@@ -672,16 +972,7 @@ const UserManagement: React.FC = () => {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {[
-                          'Dashboard',
-                          'Samples',
-                          'Patients',
-                          'Analyzer Results',
-                          'QC Management',
-                          'Reports',
-                          'User Management',
-                          'Settings',
-                        ].map((module) => {
+                        {PERMISSION_MODULES.map((module) => {
                           const permission = roleForm.permissions?.find(p => p.name === module) || {
                             view: false,
                             edit: false,
@@ -695,20 +986,21 @@ const UserManagement: React.FC = () => {
                                 <Switch
                                   checked={permission.view}
                                   onCheckedChange={() => handleRolePermissionToggle(module, 'view')}
+                                  disabled={!modulePerm.edit}
                                 />
                               </TableCell>
                               <TableCell className="text-center">
                                 <Switch
                                   checked={permission.edit}
                                   onCheckedChange={() => handleRolePermissionToggle(module, 'edit')}
-                                  disabled={!permission.view}
+                                  disabled={!modulePerm.edit || !permission.view}
                                 />
                               </TableCell>
                               <TableCell className="text-center">
                                 <Switch
                                   checked={permission.delete}
                                   onCheckedChange={() => handleRolePermissionToggle(module, 'delete')}
-                                  disabled={!permission.view || !permission.edit}
+                                  disabled={!modulePerm.edit || !permission.view || !permission.edit}
                                 />
                               </TableCell>
                             </TableRow>
@@ -752,6 +1044,45 @@ const UserManagement: React.FC = () => {
             </form>
           </DialogContent>
         </Dialog>
+
+      {/* Confirm Dialog (used for delete role/user) */}
+      <Dialog
+        open={confirmDialog.open}
+        onOpenChange={(open) => setConfirmDialog((prev) => ({ ...prev, open }))}
+      >
+        <DialogContent className="sm:max-w-[400px]">
+          <DialogHeader>
+            <DialogTitle>{confirmDialog.title}</DialogTitle>
+            <DialogDescription>{confirmDialog.description}</DialogDescription>
+          </DialogHeader>
+          <UIDialogFooter>
+            <Button
+              variant="outline"
+              type="button"
+              onClick={() => setConfirmDialog((prev) => ({ ...prev, open: false }))}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              type="button"
+              onClick={() => {
+                const action = confirmDialog.onConfirm;
+                setConfirmDialog({
+                  open: false,
+                  title: '',
+                  description: '',
+                  confirmLabel: 'Confirm',
+                  onConfirm: null,
+                });
+                if (action) action();
+              }}
+            >
+              {confirmDialog.confirmLabel}
+            </Button>
+          </UIDialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Add/Edit User Modal */}
       {isUserModalOpen && (
@@ -798,25 +1129,11 @@ const UserManagement: React.FC = () => {
                       <SelectValue placeholder="Select a role" />
                     </SelectTrigger>
                     <SelectContent>
-                      {roleOptions.map((roleName) => (
-                        <SelectItem key={roleName} value={roleName}>
-                          {roleName}
+                      {roles.map((role) => (
+                        <SelectItem key={role.id} value={role.name}>
+                          {role.name}
                         </SelectItem>
                       ))}
-                      <div className="border-t mt-1 pt-2 px-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="w-full justify-center"
-                          onClick={() => {
-                            setIsRoleModalOpen(true);
-                            setRoleForm({ id: '', name: '', permissions: [] });
-                          }}
-                        >
-                          <Plus className="h-3 w-3 mr-1" /> Add New Role
-                        </Button>
-                      </div>
                     </SelectContent>
                   </Select>
                 </div>
@@ -837,7 +1154,14 @@ const UserManagement: React.FC = () => {
                       />
                       <button
                         type="button"
-                        onClick={() => setShowPassword((prev) => !prev)}
+                        onClick={() => {
+                          if (!modulePerm.edit) {
+                            toast({ title: 'Not allowed', description: 'You only have view permission for User Management.', variant: 'destructive' });
+                            return;
+                          }
+                          setShowPassword((prev) => !prev);
+                        }}
+                        disabled={!modulePerm.edit}
                         className="absolute inset-y-0 right-0 flex items-center pr-3 text-gray-400 hover:text-gray-600"
                       >
                         {showPassword ? (
@@ -854,7 +1178,7 @@ const UserManagement: React.FC = () => {
                 <Button type="button" variant="outline" onClick={() => setIsUserModalOpen(false)}>
                   Cancel
                 </Button>
-                <Button type="submit">
+                <Button type="submit" disabled={!modulePerm.edit}>
                   {userForm.id ? 'Update User' : 'Add User'}
                 </Button>
               </CardFooter>

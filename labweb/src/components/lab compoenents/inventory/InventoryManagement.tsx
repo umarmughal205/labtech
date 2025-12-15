@@ -28,6 +28,35 @@ import AdjustLooseItemsDialog from './AdjustLooseItemsDialog';
 import InventoryToolbar from './InventoryToolbar';
 import InventoryTable from './InventoryTable';
 
+function getModulePermission(moduleName: string): { view: boolean; edit: boolean; delete: boolean } {
+  try {
+    const roleRaw = typeof window !== 'undefined' ? window.localStorage.getItem('role') : null;
+    const role = String(roleRaw || '').trim().toLowerCase();
+    const isAdmin = new Set(['admin', 'administrator', 'lab supervisor', 'lab-supervisor', 'supervisor']).has(role);
+    if (isAdmin) {
+      return { view: true, edit: true, delete: true };
+    }
+    const raw = typeof window !== 'undefined' ? window.localStorage.getItem('permissions') : null;
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (!Array.isArray(parsed)) {
+      return { view: true, edit: true, delete: true };
+    }
+
+    const wanted = String(moduleName || '').trim().toLowerCase();
+    const found = parsed.find((p: any) => String(p?.name || '').trim().toLowerCase() === wanted);
+    if (!found) {
+      return { view: true, edit: false, delete: false };
+    }
+    return {
+      view: !!found.view,
+      edit: !!found.edit,
+      delete: !!found.delete,
+    };
+  } catch {
+    return { view: true, edit: true, delete: true };
+  }
+}
+
 // TODO: Move to env config
 // Lab inventory routes are mounted at /api/lab/inventory
 // NOTE: For this mock/local mode, we are not calling the API and instead use localStorage-backed data.
@@ -124,6 +153,8 @@ function saveInventoryToStorage(items: InventoryItem[]) {
 }
 
 const InventoryManagement = () => {
+  const modulePerm = getModulePermission('Inventory');
+  const readOnly = !modulePerm.edit;
   const [searchTerm, setSearchTerm] = useState("");
   // single filter query replaces the three fields
   const [filterQuery, setFilterQuery] = useState("");
@@ -277,6 +308,10 @@ const InventoryManagement = () => {
   };
 
   const handleAddItem = async (newItem: Omit<InventoryItem, '_id' | 'lastRestocked'>) => {
+    if (!modulePerm.edit) {
+      toast({ title: 'Not allowed', description: 'You only have view permission for Inventory.', variant: 'destructive' });
+      return;
+    }
     const created: InventoryItem = {
       ...newItem,
       _id: `inv_${Date.now()}`,
@@ -297,6 +332,10 @@ const InventoryManagement = () => {
   };
 
   const handleUpdateStock = (_id: string, newStock: number) => {
+    if (!modulePerm.edit) {
+      toast({ title: 'Not allowed', description: 'You only have view permission for Inventory.', variant: 'destructive' });
+      return;
+    }
     setInventory(prev => {
       const next = prev.map(item => 
         item._id === _id 
@@ -314,6 +353,10 @@ const InventoryManagement = () => {
   };
 
   const handleDeleteItem = async (_id: string) => {
+    if (!modulePerm.delete) {
+      toast({ title: 'Not allowed', description: "You don't have delete permission for Inventory.", variant: 'destructive' });
+      return;
+    }
     if (!window.confirm("Are you sure you want to delete this item?")) return;
     setInventory((prev) => {
       const next = prev.filter((item) => item._id !== _id);
@@ -404,13 +447,45 @@ const InventoryManagement = () => {
             onSearch={setSearchTerm}
             showSearch={false}
           />
-          <Button variant="secondary" className="bg-blue-800 text-white hover:bg-blue-900" onClick={() => setShowQuickUpdate(true)}>
+          <Button
+            variant="secondary"
+            className={!modulePerm.edit ? 'opacity-50 cursor-not-allowed bg-blue-800 text-white hover:bg-blue-900' : 'bg-blue-800 text-white hover:bg-blue-900'}
+            disabled={!modulePerm.edit}
+            onClick={() => {
+              if (!modulePerm.edit) {
+                toast({ title: 'Not allowed', description: 'You only have view permission for Inventory.', variant: 'destructive' });
+                return;
+              }
+              setShowQuickUpdate(true);
+            }}
+          >
             Update Stock
           </Button>
-          <Button variant="secondary" className="bg-blue-800 text-white hover:bg-blue-900" onClick={() => setShowQuickAdjust(true)}>
+          <Button
+            variant="secondary"
+            className={!modulePerm.edit ? 'opacity-50 cursor-not-allowed bg-blue-800 text-white hover:bg-blue-900' : 'bg-blue-800 text-white hover:bg-blue-900'}
+            disabled={!modulePerm.edit}
+            onClick={() => {
+              if (!modulePerm.edit) {
+                toast({ title: 'Not allowed', description: 'You only have view permission for Inventory.', variant: 'destructive' });
+                return;
+              }
+              setShowQuickAdjust(true);
+            }}
+          >
             Add Loose Items
           </Button>
-          <Button className="bg-blue-800 text-white hover:bg-blue-900" onClick={() => setIsAddingItem(true)}>
+          <Button
+            className={!modulePerm.edit ? 'opacity-50 cursor-not-allowed bg-blue-800 text-white hover:bg-blue-900' : 'bg-blue-800 text-white hover:bg-blue-900'}
+            disabled={!modulePerm.edit}
+            onClick={() => {
+              if (!modulePerm.edit) {
+                toast({ title: 'Not allowed', description: 'You only have view permission for Inventory.', variant: 'destructive' });
+                return;
+              }
+              setIsAddingItem(true);
+            }}
+          >
             <Plus className="w-4 h-4 mr-2" />
             Add New Item
           </Button>
@@ -506,10 +581,33 @@ const InventoryManagement = () => {
           <InventoryTable 
             rows={filteredInventory as any}
             filter={tableFilter}
-            onEdit={(row)=> { const item = inventory.find(i=> i._id === row._id); if (item) { setEditingItem(item); setIsEditing(true);} }}
+            canEdit={modulePerm.edit}
+            canDelete={modulePerm.delete}
+            onEdit={(row)=> {
+              if (!modulePerm.edit) {
+                toast({ title: 'Not allowed', description: 'You only have view permission for Inventory.', variant: 'destructive' });
+                return;
+              }
+              const item = inventory.find(i=> i._id === row._id);
+              if (item) { setEditingItem(item); setIsEditing(true); }
+            }}
             onDelete={(row)=> handleDeleteItem(row._id)}
-            onUpdateStock={(row)=> { const item = inventory.find(i=> i._id === row._id); if (item) setUpdateStockFor(item); }}
-            onAdjustUnits={(row)=> { const item = inventory.find(i=> i._id === row._id); if (item) setAdjustUnitsFor(item); }}
+            onUpdateStock={(row)=> {
+              if (!modulePerm.edit) {
+                toast({ title: 'Not allowed', description: 'You only have view permission for Inventory.', variant: 'destructive' });
+                return;
+              }
+              const item = inventory.find(i=> i._id === row._id);
+              if (item) setUpdateStockFor(item);
+            }}
+            onAdjustUnits={(row)=> {
+              if (!modulePerm.edit) {
+                toast({ title: 'Not allowed', description: 'You only have view permission for Inventory.', variant: 'destructive' });
+                return;
+              }
+              const item = inventory.find(i=> i._id === row._id);
+              if (item) setAdjustUnitsFor(item);
+            }}
           />
         </CardContent>
       </Card>

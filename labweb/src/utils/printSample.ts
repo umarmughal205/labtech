@@ -11,6 +11,12 @@ export type SampleSlip = {
   gender?: string;
   address?: string;
   tests?: { name: string; price?: number }[];
+  urgentRate?: number;
+  urgentAmount?: number;
+  discountRate?: number;
+  discountAmount?: number;
+  taxRate?: number;
+  taxAmount?: number;
   totalAmount?: number;
 };
 
@@ -34,29 +40,56 @@ export function printSampleSlip(sample: SampleSlip, opts?: { title?: string }) {
     <style>
       *{ box-sizing: border-box; }
       html, body{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-      body{ font-family: Segoe UI, Arial, 'Helvetica Neue', system-ui, ui-sans-serif; margin: 10mm; color: #000; font-weight:600; -webkit-font-smoothing: none; text-rendering: optimizeSpeed; }
+      body{ font-family: Segoe UI, Arial, 'Helvetica Neue', system-ui, ui-sans-serif; margin: 10mm; color: #000; font-weight:400; -webkit-font-smoothing: none; text-rendering: optimizeSpeed; }
       .header{ display:block; text-align:center; border-bottom:1px dashed #000; padding-bottom:8px; margin-bottom:10px; }
       .h-left{ display:block; }
-      .logo{ width:34px; height:34px; object-fit:contain; margin:0 auto 4px; }
+      .logo{ width:44px; height:44px; object-fit:contain; margin:0 auto 4px; }
       .title{ font-size:18px; font-weight:700; line-height:1.15; }
       .meta{ font-size:13px; color:#000; font-weight:600; }
       .meta-sm{ font-size:12px; color:#000; font-weight:600; }
+      .dt{ font-weight:400 !important; }
       .row{ display:grid; grid-template-columns: 1fr 1fr; gap:8px; font-size:13px; }
-      .label{ color:#000; font-weight:600; }
-      .value{ font-weight:700; color:#000; }
-      .phone-number{ font-weight:800; }
+      .label{ color:#000; font-weight:700 !important; }
+      .value{ font-weight:400 !important; color:#000; }
+      .phone-number{ font-weight:400 !important; }
       .big{ font-size:22px; font-weight:700; letter-spacing:0.5px; }
       .center{ text-align:center; }
       .footer{ border-top:1px dashed #000; margin-top:10px; padding-top:6px; font-size:12px; color:#000; font-weight:600; }
       .tests{ margin-top:8px; font-size:13px; }
-      .tests .item{ display:flex; justify-content:space-between; padding:4px 0; font-weight:600; }
+      .tests .item{ display:flex; justify-content:space-between; padding:4px 0; font-weight:400 !important; }
+      .tests .item span:first-child{ min-width: 0; padding-right:10px; overflow-wrap:anywhere; }
+      .tests .item span:last-child{ white-space:nowrap; }
+      .divider{ border-top:1px dashed #000; margin:6px 0; }
       .total{ display:flex; justify-content:space-between; font-weight:700; margin-top:6px; border-top:1px dashed #000; padding-top:6px; }
-      @page{ size: 80mm auto; margin: 8mm; }
+      @media screen {
+        body{ margin: 10px; }
+      }
+      @media screen and (max-width: 520px) {
+        body{ margin: 8px; }
+        .row{ grid-template-columns: 1fr; }
+        .big{ font-size:20px; }
+      }
+      @media print {
+        @page{ size: 80mm auto; margin: 8mm; }
+      }
     </style>`;
 
   const testsHtml = (sample.tests || [])
     .map(t => `<div class="item"><span>${escapeHtml(t.name)}</span><span>${formatCurrency(Number(t.price||0))}</span></div>`) 
     .join('');
+
+  const urgentRate = Number(sample?.urgentRate || 0);
+  const urgentAmount = Number(sample?.urgentAmount || 0);
+  const discountRate = Number(sample?.discountRate || 0);
+  const discountAmount = Number(sample?.discountAmount || 0);
+  const taxRate = Number(sample?.taxRate || 0);
+  const taxAmount = Number(sample?.taxAmount || 0);
+
+  const chargesHtml = `
+    ${urgentRate > 0 ? `<div class="item"><span>Urgent charges (${urgentRate.toFixed(0)}%)</span><span>+ ${formatCurrency(urgentAmount)}</span></div>` : ''}
+    <div class="item"><span>Discount (${discountRate.toFixed(0)}%)</span><span>- ${formatCurrency(discountAmount)}</span></div>
+    <div class="item"><span>Tax (${taxRate.toFixed(0)}%)</span><span>+ ${formatCurrency(taxAmount)}</span></div>
+  `;
 
   const html = `<!doctype html><html><head><meta charset="utf-8"/><title>${title}</title>${styles}</head>
     <body>
@@ -75,7 +108,7 @@ export function printSampleSlip(sample: SampleSlip, opts?: { title?: string }) {
         </div>
         <div class="center">
           <div class="big">${escapeHtml(String(sample?.sampleNumber ?? ''))}</div>
-          <div class="meta">${dt.toLocaleDateString()} ${dt.toLocaleTimeString()}</div>
+          <div class="meta dt">${dt.toLocaleDateString()} ${dt.toLocaleTimeString()}</div>
         </div>
       </div>
 
@@ -84,17 +117,20 @@ export function printSampleSlip(sample: SampleSlip, opts?: { title?: string }) {
         <div><span class="label">CNIC:</span> <span class="value">${escapeHtml(sample?.cnic || '')}</span></div>
         ${(sample?.guardianRelation || sample?.guardianName) ? `<div><span class="label">Guardian:</span> <span class="value">${escapeHtml(String(sample?.guardianRelation || ''))} ${escapeHtml(String(sample?.guardianName || ''))}</span></div>` : ''}
         <div><span class="label">Age/Gender:</span> <span class="value">${escapeHtml(String(sample?.age ?? ''))} / ${escapeHtml(String(sample?.gender || ''))}</span></div>
-        <div><span class="label">Phone:</span> <span class="value phone-number"><strong>${escapeHtml(sample?.phone || '')}</strong></span></div>
-        <div class="value" style="grid-column: span 2">${escapeHtml(sample?.address || '')}</div>
+        <div><span class="label">Phone:</span> <span class="value phone-number">${escapeHtml(sample?.phone || '')}</span></div>
+        <div style="grid-column: span 2"><span class="label">Address:</span> <span class="value">${escapeHtml(sample?.address || '')}</span></div>
       </div>
 
       <div class="tests">
+        <div class="divider"></div>
         ${testsHtml}
+        <div class="divider"></div>
+        ${chargesHtml}
         <div class="total"><span>Total</span><span>${formatCurrency(Number(sample?.totalAmount||0))}</span></div>
       </div>
 
       <div class="footer center">
-        Powered by Hospital MIS
+        Powered by MindSpire
       </div>
     </body></html>`;
 

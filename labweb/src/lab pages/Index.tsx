@@ -18,7 +18,6 @@ import ReportGenerator from "@/components/lab compoenents/results/ReportGenerato
 import ReportDesigner from "@/components/lab compoenents/reports/ReportDesigner";
 import InventoryManagement from "@/components/lab compoenents/inventory/InventoryManagement";
 import SuppliersPage from "@/components/lab compoenents/suppliers/SuppliersPage";
-import PurchaseHistory from "@/components/lab compoenents/suppliers/PurchaseHistory";
 import StaffAttendance from "@/components/lab compoenents/staff attendance/StaffAttendance";
 import Settings from "@/components/lab compoenents/common/Settings";
 import Notifications from "@/components/lab compoenents/common/Notifications";
@@ -41,7 +40,6 @@ export type CurrentView =
   | "report-designer" 
   | "inventory" 
   | "suppliers"
-  | "purchase-history"
   | "staff-attendance" 
   | "settings" 
   | "notifications"
@@ -61,7 +59,65 @@ const Index = () => {
   const [authMode, setAuthMode] = useState<"login" | "signup">("login");
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
-  const [phSupplier, setPhSupplier] = useState<{ id?: string; name?: string } | null>(null);
+
+  const isAdminUser = (): boolean => {
+    try {
+      const raw = localStorage.getItem('role');
+      const role = String(raw || '').trim().toLowerCase();
+      return new Set(['admin', 'administrator', 'lab supervisor', 'lab-supervisor', 'supervisor']).has(role);
+    } catch {
+      return false;
+    }
+  };
+
+  const getAllowedPermissionNames = (): Set<string> => {
+    try {
+      const raw = localStorage.getItem('permissions');
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (!Array.isArray(parsed)) return new Set();
+      return new Set(
+        parsed
+          .filter((p: any) => p && p.view)
+          .map((p: any) => String(p.name || '').trim().toLowerCase())
+          .filter(Boolean)
+      );
+    } catch {
+      return new Set();
+    }
+  };
+
+  const isViewAllowed = (view: CurrentView): boolean => {
+    if (isAdminUser()) return true;
+    const allowed = getAllowedPermissionNames();
+    if (allowed.size === 0) return true; // if no permissions provided, don't block
+
+    const map: Record<string, string> = {
+      'dashboard': 'Dashboard',
+      'test-catalog': 'Test Catalog',
+      'sample-intake': 'Sample Intake',
+      'sample-tracking': 'Sample Tracking',
+      'samples': 'Samples',
+      'barcodes': 'Barcodes',
+      'result-entry': 'Result Entry',
+      'report-designer': 'Report Designer',
+      'report-generator': 'Report Generator',
+      'inventory': 'Inventory',
+      'appointments': 'Appointments',
+      'appointments-history': 'Appointments History',
+      'suppliers': 'Suppliers',
+      'staff-attendance': 'Staff Attendance',
+      'notifications': 'Notifications',
+      'settings': 'Settings',
+      'finance': 'Finance',
+      'ledger': 'Financial Ledger',
+      'expenses': 'Expenses',
+      'user-management': 'User Management',
+    };
+
+    const required = map[String(view)];
+    if (!required) return false;
+    return allowed.has(String(required).trim().toLowerCase());
+  };
 
   const handleLogin = (role: UserRole) => {
     setCurrentRole(role);
@@ -82,12 +138,18 @@ const Index = () => {
   };
 
   const handleViewChange = (view: CurrentView) => {
-    if (view === "purchase-history") {
-      // Clear any supplier filter when user navigates via menu
-      setPhSupplier(null);
+    if (!isViewAllowed(view)) {
+      // silently ignore disallowed navigation
+      return;
     }
     setCurrentView(view);
   };
+
+  useEffect(() => {
+    if (!isViewAllowed(currentView)) {
+      setCurrentView('dashboard');
+    }
+  }, [currentView]);
 
   useEffect(() => {
     const onConfirmed = () => {
@@ -99,22 +161,6 @@ const Index = () => {
     };
   }, []);
 
-  useEffect(() => {
-    const onOpenPh = (e: Event) => {
-      try {
-        const detail = (e as CustomEvent<{ supplierId: string; supplierName: string }>).detail;
-        if (detail) {
-          setPhSupplier({ id: detail.supplierId, name: detail.supplierName });
-          setCurrentView("purchase-history");
-        }
-      } catch {
-        // ignore malformed events
-      }
-    };
-    window.addEventListener("openPurchaseHistoryForSupplier", onOpenPh as EventListener);
-    return () => window.removeEventListener("openPurchaseHistoryForSupplier", onOpenPh as EventListener);
-  }, []);
-
   const renderContent = () => {
     if (currentView === "settings") return <Settings />;
     if (currentView === "notifications") return <Notifications />;
@@ -124,7 +170,6 @@ const Index = () => {
     if (currentView === "appointments") return <Appointment />;
     if (currentView === "appointments-history") return <AppointmentsHistory />;
     if (currentView === "suppliers") return <SuppliersPage />;
-    if (currentView === "purchase-history") return <PurchaseHistory supplierId={phSupplier?.id} supplierName={phSupplier?.name} />;
     if (currentView === "staff-attendance") return <StaffAttendance isUrdu={false} />;
     if (currentView === "user-management") return <UserManagement />;
     if (currentView === "samples") return <SamplesPage />;

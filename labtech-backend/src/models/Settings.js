@@ -20,6 +20,7 @@ const settingsSchema = new mongoose.Schema(
       defaultCurrency: { type: String, default: 'PKR' },
       taxRate: { type: Number, default: 0 },
       bulkDiscountRate: { type: Number, default: 0 },
+      urgentTestUpliftRate: { type: Number, default: 0 },
     },
     notifications: {
       emailNotifications: { type: Boolean, default: false },
@@ -33,6 +34,8 @@ const settingsSchema = new mongoose.Schema(
       enabled: { type: Boolean, default: false },
       time: { type: String, default: '02:00' },
     },
+    // Stores the current report designer template used for report generation
+    reportTemplate: { type: mongoose.Schema.Types.Mixed, default: null },
   },
   { timestamps: true }
 );

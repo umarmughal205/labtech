@@ -32,9 +32,37 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Search, Filter, Plus, Eye, Edit2, MoreHorizontal, XCircle, ChevronDown, FileText, History } from "lucide-react";
-import { createPurchaseOrder, PurchaseOrderItem } from "@/components/lab compoenents/suppliers/purchaseOrdersStore";
+import { Search, Filter, Plus, Eye, Edit2, MoreHorizontal, XCircle, ChevronDown } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+
+function getModulePermission(moduleName: string): { view: boolean; edit: boolean; delete: boolean } {
+  try {
+    const roleRaw = typeof window !== 'undefined' ? window.localStorage.getItem('role') : null;
+    const role = String(roleRaw || '').trim().toLowerCase();
+    const isAdmin = new Set(['admin', 'administrator', 'lab supervisor', 'lab-supervisor', 'supervisor']).has(role);
+    if (isAdmin) {
+      return { view: true, edit: true, delete: true };
+    }
+    const raw = typeof window !== 'undefined' ? window.localStorage.getItem('permissions') : null;
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (!Array.isArray(parsed)) {
+      return { view: true, edit: true, delete: true };
+    }
+
+    const wanted = String(moduleName || '').trim().toLowerCase();
+    const found = parsed.find((p: any) => String(p?.name || '').trim().toLowerCase() === wanted);
+    if (!found) {
+      return { view: true, edit: false, delete: false };
+    }
+    return {
+      view: !!found.view,
+      edit: !!found.edit,
+      delete: !!found.delete,
+    };
+  } catch {
+    return { view: true, edit: true, delete: true };
+  }
+}
 
 interface SupplierRecord {
   id: string;
@@ -103,6 +131,7 @@ const getStatusBadgeClasses = (status: SupplierRecord["status"]) => {
 };
 
 const SuppliersPage: React.FC = () => {
+  const modulePerm = getModulePermission('Suppliers');
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [page, setPage] = useState(1);
@@ -115,15 +144,6 @@ const SuppliersPage: React.FC = () => {
   const [editing, setEditing] = useState<SupplierRecord | null>(null);
   const [isViewOpen, setIsViewOpen] = useState(false);
   const [viewing, setViewing] = useState<SupplierRecord | null>(null);
-
-  const [isCreatePoOpen, setIsCreatePoOpen] = useState(false);
-  const [poSupplier, setPoSupplier] = useState<SupplierRecord | null>(null);
-  const [poForm, setPoForm] = useState({
-    description: "",
-    quantity: "",
-    unitPrice: "",
-    notes: "",
-  });
 
   const { toast } = useToast();
 
@@ -212,6 +232,10 @@ const SuppliersPage: React.FC = () => {
   };
 
   const handleAddSupplier = () => {
+    if (!modulePerm.edit) {
+      toast({ title: 'Not allowed', description: 'You only have view permission for Suppliers.', variant: 'destructive' });
+      return;
+    }
     if (!addForm.name || !addForm.contactPerson || !addForm.email) return;
 
     const products = addForm.products
@@ -241,6 +265,10 @@ const SuppliersPage: React.FC = () => {
   };
 
   const openEdit = (supplier: SupplierRecord) => {
+    if (!modulePerm.edit) {
+      toast({ title: 'Not allowed', description: 'You only have view permission for Suppliers.', variant: 'destructive' });
+      return;
+    }
     setEditing(supplier);
     setEditForm({
       name: supplier.name,
@@ -258,6 +286,10 @@ const SuppliersPage: React.FC = () => {
   };
 
   const handleUpdateSupplier = () => {
+    if (!modulePerm.edit) {
+      toast({ title: 'Not allowed', description: 'You only have view permission for Suppliers.', variant: 'destructive' });
+      return;
+    }
     if (!editing) return;
     if (!editForm.name || !editForm.contactPerson) return;
 
@@ -292,6 +324,10 @@ const SuppliersPage: React.FC = () => {
   };
 
   const handleCancelContract = (id: string) => {
+    if (!modulePerm.edit) {
+      toast({ title: 'Not allowed', description: 'You only have view permission for Suppliers.', variant: 'destructive' });
+      return;
+    }
     const confirmed = window.confirm(
       "Are you sure you want to cancel this supplier's contract?"
     );
@@ -316,53 +352,6 @@ const SuppliersPage: React.FC = () => {
     );
   };
 
-  const openCreatePo = (supplier: SupplierRecord) => {
-    setPoSupplier(supplier);
-    setPoForm({ description: "", quantity: "", unitPrice: "", notes: "" });
-    setIsCreatePoOpen(true);
-  };
-
-  const handleCreatePo = () => {
-    if (!poSupplier) return;
-
-    const effectiveStatus =
-      poSupplier.status === "Cancelled"
-        ? "Cancelled"
-        : computeStatus(poSupplier.contractEndDate, poSupplier.contractStartDate);
-
-    if (effectiveStatus === "Inactive" || effectiveStatus === "Cancelled") {
-      window.alert("Cannot create a purchase order for an inactive or cancelled supplier.");
-      return;
-    }
-
-    const quantity = parseFloat(poForm.quantity);
-    const unitPrice = parseFloat(poForm.unitPrice);
-    if (!poForm.description || !poForm.quantity || !poForm.unitPrice || isNaN(quantity) || isNaN(unitPrice)) {
-      return;
-    }
-
-    const item: PurchaseOrderItem = {
-      description: poForm.description,
-      quantity,
-      unitPrice,
-    };
-
-    const created = createPurchaseOrder({
-      supplierId: poSupplier.id,
-      supplierName: poSupplier.name,
-      items: [item],
-      notes: poForm.notes || undefined,
-    });
-
-    setIsCreatePoOpen(false);
-    setPoSupplier(null);
-
-    toast({
-      title: "Purchase Order Created",
-      description: `PO ${created.poId} has been saved. You can view it in Purchase History.`,
-    });
-  };
-
   return (
     <div className="p-6 space-y-6 bg-slate-50">
       <div className="flex items-center justify-between">
@@ -373,8 +362,15 @@ const SuppliersPage: React.FC = () => {
           </p>
         </div>
         <Button
-          className="bg-blue-800 hover:bg-blue-700 text-white rounded-full px-6 shadow-sm"
-          onClick={() => setIsAddOpen(true)}
+          className={!modulePerm.edit ? 'opacity-50 cursor-not-allowed bg-blue-800 hover:bg-blue-700 text-white rounded-full px-6 shadow-sm' : 'bg-blue-800 hover:bg-blue-700 text-white rounded-full px-6 shadow-sm'}
+          disabled={!modulePerm.edit}
+          onClick={() => {
+            if (!modulePerm.edit) {
+              toast({ title: 'Not allowed', description: 'You only have view permission for Suppliers.', variant: 'destructive' });
+              return;
+            }
+            setIsAddOpen(true);
+          }}
         >
           <Plus className="h-4 w-4 mr-2" />
           Add New Supplier
@@ -485,12 +481,14 @@ const SuppliersPage: React.FC = () => {
                               </button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="start" className="w-40">
-                              <DropdownMenuItem
-                                className="flex items-center gap-2 text-xs text-red-600"
-                                onClick={() => handleCancelContract(s.id)}
-                              >
-                                Cancel contract
-                              </DropdownMenuItem>
+                              {modulePerm.edit && (
+                                <DropdownMenuItem
+                                  className="flex items-center gap-2 text-xs text-red-600"
+                                  onClick={() => handleCancelContract(s.id)}
+                                >
+                                  Cancel contract
+                                </DropdownMenuItem>
+                              )}
                             </DropdownMenuContent>
                           </DropdownMenu>
                         )}
@@ -515,33 +513,15 @@ const SuppliersPage: React.FC = () => {
                             <Eye className="h-3.5 w-3.5" />
                             <span>View details</span>
                           </DropdownMenuItem>
-                          <DropdownMenuItem
-                            className="flex items-center gap-2 text-xs"
-                            onClick={() => openEdit(s)}
-                          >
-                            <Edit2 className="h-3.5 w-3.5" />
-                            <span>Edit supplier</span>
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            className="flex items-center gap-2 text-xs"
-                            onClick={() => {
-                              window.dispatchEvent(
-                                new CustomEvent("openPurchaseHistoryForSupplier", {
-                                  detail: { supplierId: s.id, supplierName: s.name },
-                                })
-                              );
-                            }}
-                          >
-                            <History className="h-3.5 w-3.5" />
-                            <span>Purchase History</span>
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            className="flex items-center gap-2 text-xs"
-                            onClick={() => openCreatePo(s)}
-                          >
-                            <FileText className="h-3.5 w-3.5" />
-                            <span>Create PO</span>
-                          </DropdownMenuItem>
+                          {modulePerm.edit && (
+                            <DropdownMenuItem
+                              className="flex items-center gap-2 text-xs"
+                              onClick={() => openEdit(s)}
+                            >
+                              <Edit2 className="h-3.5 w-3.5" />
+                              <span>Edit supplier</span>
+                            </DropdownMenuItem>
+                          )}
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </TableCell>
@@ -579,71 +559,6 @@ const SuppliersPage: React.FC = () => {
           </div>
         </CardContent>
       </Card>
-
-      <Dialog open={isCreatePoOpen} onOpenChange={(open) => {
-        setIsCreatePoOpen(open);
-        if (!open) {
-          setPoSupplier(null);
-        }
-      }}>
-        <DialogContent className="sm:max-w-[520px]">
-          <DialogHeader>
-            <DialogTitle>Create Purchase Order</DialogTitle>
-            <DialogDescription>
-              Create a new purchase order for this supplier. This will be saved to local history.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-2 text-sm">
-            {poSupplier && (
-              <div className="rounded-md bg-gray-50 border px-3 py-2 text-xs text-gray-700 space-y-1">
-                <div className="font-semibold text-gray-900 text-sm">{poSupplier.name}</div>
-                {poSupplier.contactPerson && <div>Contact: {poSupplier.contactPerson}</div>}
-                {poSupplier.email && <div>Email: {poSupplier.email}</div>}
-              </div>
-            )}
-            <div className="space-y-2">
-              <label className="text-xs font-medium text-gray-700">Item description *</label>
-              <Input
-                value={poForm.description}
-                onChange={(e) => setPoForm({ ...poForm, description: e.target.value })}
-                placeholder="e.g. Reagents, Pipette Tips"
-              />
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <label className="text-xs font-medium text-gray-700">Quantity *</label>
-                <Input
-                  value={poForm.quantity}
-                  onChange={(e) => setPoForm({ ...poForm, quantity: e.target.value })}
-                  placeholder="e.g. 10"
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-medium text-gray-700">Unit Price (Rs) *</label>
-                <Input
-                  value={poForm.unitPrice}
-                  onChange={(e) => setPoForm({ ...poForm, unitPrice: e.target.value })}
-                  placeholder="e.g. 450"
-                />
-              </div>
-            </div>
-            <div className="space-y-2">
-              <label className="text-xs font-medium text-gray-700">Notes (optional)</label>
-              <Input
-                value={poForm.notes}
-                onChange={(e) => setPoForm({ ...poForm, notes: e.target.value })}
-                placeholder="Additional instructions or reference"
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIsCreatePoOpen(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleCreatePo}>Save Purchase Order</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
         <DialogContent className="sm:max-w-[720px] max-h-[80vh] overflow-y-auto">

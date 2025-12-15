@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -9,6 +9,39 @@ import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Square, Image, Text, Table, StickyNote, User, Stethoscope } from 'lucide-react';
+import { useSettings } from '@/contexts/SettingsContext';
+import { api } from '@/lab lib/api';
+import { useToast } from '@/hooks/use-toast';
+
+function getModulePermission(moduleName: string): { view: boolean; edit: boolean; delete: boolean } {
+  try {
+    const roleRaw = typeof window !== 'undefined' ? window.localStorage.getItem('role') : null;
+    const role = String(roleRaw || '').trim().toLowerCase();
+    const isAdmin = new Set(['admin', 'administrator', 'lab supervisor', 'lab-supervisor', 'supervisor']).has(role);
+    if (isAdmin) {
+      return { view: true, edit: true, delete: true };
+    }
+    const raw = typeof window !== 'undefined' ? window.localStorage.getItem('permissions') : null;
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (!Array.isArray(parsed)) {
+      return { view: true, edit: true, delete: true };
+    }
+
+    const wanted = String(moduleName || '').trim().toLowerCase();
+    const found = parsed.find((p: any) => String(p?.name || '').trim().toLowerCase() === wanted);
+    if (!found) {
+      // If permissions exist but module isn't listed, default to view-only for safety.
+      return { view: true, edit: false, delete: false };
+    }
+    return {
+      view: !!found.view,
+      edit: !!found.edit,
+      delete: !!found.delete,
+    };
+  } catch {
+    return { view: true, edit: true, delete: true };
+  }
+}
 
 type ComponentType = 'patient-info' | 'doctor-info' | 'result-table' | 'logo' | 'header-text' | 'notes' | 'signature';
 
@@ -27,16 +60,39 @@ interface ComponentItem {
   settings?: any;
 }
 
+function getLabContactFromStorage() {
+  try {
+    const raw = typeof window !== 'undefined' ? window.localStorage.getItem('labSettings') : null;
+    if (!raw) return { phone: '', email: '', address: '' };
+    const parsed = JSON.parse(raw) as { phone?: string; email?: string; address?: string };
+    return {
+      phone: parsed.phone || '',
+      email: parsed.email || '',
+      address: parsed.address || '',
+    };
+  } catch {
+    return { phone: '', email: '', address: '' };
+  }
+}
+
 const components: ComponentItem[] = [
-  { id: '1', type: 'patient-info', label: 'Patient Info Block', icon: <User className="h-4 w-4" /> },
-  { id: '2', type: 'doctor-info', label: 'Doctor Info', icon: <Stethoscope className="h-4 w-4" /> },
-  { id: '3', type: 'result-table', label: 'Result Table', icon: <Table className="h-4 w-4" /> },
-  { id: '4', type: 'logo', label: 'Logo', icon: <Image className="h-4 w-4" /> },
   { id: '5', type: 'header-text', label: 'Header Text', icon: <Text className="h-4 w-4" /> },
-  { id: '6', type: 'notes', label: 'Notes Section', icon: <StickyNote className="h-4 w-4" /> },
+  { id: '1', type: 'patient-info', label: 'Patient Info Block', icon: <User className="h-4 w-4" /> },
+  { id: '3', type: 'result-table', label: 'Result Table', icon: <Table className="h-4 w-4" /> },
+  { id: '6', type: 'notes', label: 'Interpretation Section', icon: <StickyNote className="h-4 w-4" /> },
 ];
 
 export function ReportDesigner() {
+  const { settings } = useSettings();
+  const { toast } = useToast();
+  const modulePerm = getModulePermission('Report Designer');
+  const readOnly = !modulePerm.edit;
+  const derivedLabName = settings.hospitalName || 'Medical Laboratory Report';
+  const derivedLabLogoUrl = settings.labLogoUrl || null;
+  // Only the part after "Accredited by" is stored; we render the prefix in JSX
+  const derivedLabSubtitle = settings.labSubtitle || 'ISO 15189:2012';
+  const labContact = getLabContactFromStorage();
+
   const [activeTab, setActiveTab] = useState('style');
   const [fontSize, setFontSize] = useState(12);
   const [headerColor, setHeaderColor] = useState('#2D7FF9');
@@ -61,13 +117,19 @@ export function ReportDesigner() {
       label: 'Patient Info',
       icon: <User className="h-4 w-4" />,
       data: {
-        name: 'John Smith',
-        age: '35',
-        gender: 'Male',
-        patientId: 'PT123456',
-        collectionDate: '2025-11-24',
-        reportDate: '2025-11-24',
-        referringPhysician: 'Dr. Sarah Johnson'
+        name: '',
+        age: '',
+        gender: '',
+        patientId: '',
+        address: '',
+        phone: '',
+        email: '',
+        collectionDate: '',
+        receivedDate: '',
+        reportDate: '',
+        sampleId: '',
+        referringPhysician: '',
+        department: ''
       }
     },
     {
@@ -76,18 +138,7 @@ export function ReportDesigner() {
       label: 'Results',
       icon: <Table className="h-4 w-4" />,
       data: {
-        tests: [
-          { test: 'Hemoglobin', result: '14.2', unit: 'g/dL', range: '12.0-16.0' },
-          { test: 'Hematocrit', result: '42.5', unit: '%', range: '36.0-48.0' },
-          { test: 'White Blood Cells', result: '7.2', unit: 'x10^3/µL', range: '4.5-11.0' },
-          { test: 'Red Blood Cells', result: '5.1', unit: 'x10^6/µL', range: '4.2-5.8' },
-          { test: 'Platelets', result: '250', unit: 'x10^3/µL', range: '150-400' },
-          { test: 'Glucose', result: '98', unit: 'mg/dL', range: '70-100' },
-          { test: 'Cholesterol', result: '185', unit: 'mg/dL', range: '<200' },
-          { test: 'Triglycerides', result: '120', unit: 'mg/dL', range: '<150' },
-          { test: 'HDL', result: '55', unit: 'mg/dL', range: '>40' },
-          { test: 'LDL', result: '110', unit: 'mg/dL', range: '<130' }
-        ]
+        tests: []
       }
     },
     {
@@ -107,10 +158,57 @@ export function ReportDesigner() {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   const handleDragStart = (e: React.DragEvent, component: ComponentItem) => {
+    if (readOnly) {
+      e.preventDefault();
+      toast({
+        title: 'Not allowed',
+        description: 'You only have view permission for Report Designer.',
+        variant: 'destructive',
+      });
+      return;
+    }
     e.dataTransfer.setData('component', JSON.stringify(component));
   };
 
+  // On mount, hydrate from any saved report template so layout (including
+  // Interpretation section) persists when navigating away and back.
+  useEffect(() => {
+    const loadTemplate = async () => {
+      try {
+        const res = await api.get('/settings');
+        const data = res.data || {};
+        const template = data.reportTemplate;
+        if (template && Array.isArray(template.components)) {
+          setReportComponents(template.components as ComponentItem[]);
+        }
+        if (template?.styles) {
+          if (typeof template.styles.fontSize === 'number') {
+            setFontSize(template.styles.fontSize);
+          }
+          if (typeof template.styles.headerColor === 'string') {
+            setHeaderColor(template.styles.headerColor);
+          }
+          if (typeof template.styles.borderStyle === 'string') {
+            setBorderStyle(template.styles.borderStyle);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to load report template from settings', err);
+      }
+    };
+
+    loadTemplate();
+  }, []);
+
   const addComponent = (component: ComponentItem) => {
+    if (readOnly) {
+      toast({
+        title: 'Not allowed',
+        description: 'You only have view permission for Report Designer.',
+        variant: 'destructive',
+      });
+      return;
+    }
     const newComponent = { 
       ...component, 
       id: `${component.id}-${Date.now()}`,
@@ -129,11 +227,27 @@ export function ReportDesigner() {
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
+    if (readOnly) {
+      toast({
+        title: 'Not allowed',
+        description: 'You only have view permission for Report Designer.',
+        variant: 'destructive',
+      });
+      return;
+    }
     const componentData = JSON.parse(e.dataTransfer.getData('component'));
     addComponent(componentData);
   };
 
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (readOnly) {
+      toast({
+        title: 'Not allowed',
+        description: 'You only have view permission for Report Designer.',
+        variant: 'destructive',
+      });
+      return;
+    }
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -160,6 +274,14 @@ export function ReportDesigner() {
   };
 
   const updateLogoSetting = (field: string, value: any) => {
+    if (readOnly) {
+      toast({
+        title: 'Not allowed',
+        description: 'You only have view permission for Report Designer.',
+        variant: 'destructive',
+      });
+      return;
+    }
     if (!selectedComponent || selectedComponent.type !== 'logo') return;
     
     const updatedComponents = reportComponents.map(comp => {
@@ -179,25 +301,80 @@ export function ReportDesigner() {
   };
 
   const handleDragOver = (e: React.DragEvent) => {
+    if (readOnly) return;
     e.preventDefault();
   };
 
+  const handleSaveTemplate = async () => {
+    if (readOnly) {
+      toast({
+        title: 'Not allowed',
+        description: 'You only have view permission for Report Designer.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    // Strip non-serializable fields (like React icon nodes) before sending
+    const serializableComponents = reportComponents.map((comp) => {
+      const { icon, ...rest } = comp;
+      return {
+        ...rest,
+      } as ComponentItem;
+    });
+
+    const template = {
+      components: serializableComponents,
+      styles: {
+        fontSize,
+        headerColor,
+        borderStyle,
+      },
+    };
+
+    try {
+      await api.put('/settings/report-template', { reportTemplate: template });
+      toast({
+        title: 'Report template saved',
+        description: 'This template will now be used for report generation.',
+      });
+    } catch (err) {
+      console.error('Failed to save report template', err);
+      toast({
+        title: 'Failed to save report template',
+        description: 'Please try again.',
+        variant: 'destructive',
+      });
+    }
+  };
+
   const renderComponent = (component: ComponentItem) => {
+    const componentFontSize: number | undefined = component.data?.fontSize;
     const isSelected = selectedComponent?.id === component.id;
     const componentClasses = `relative group ${isSelected ? 'ring-2 ring-blue-500 rounded' : ''} mb-4`;
     switch (component.type) {
       case 'patient-info':
         return (
-          <div className="border-b border-gray-200 pb-4 mb-4">
-            <div className="grid grid-cols-2 gap-4 text-sm">
-              <div>
+          <div
+            className="border-b border-gray-200 pb-4 mb-4"
+            style={{
+              borderStyle: borderStyle === 'none' ? 'none' : borderStyle,
+              fontSize: componentFontSize ? `${componentFontSize}px` : undefined,
+            }}
+          >
+            <div className="grid grid-cols-3 gap-4">
+              <div className="space-y-1">
                 <p><span className="font-medium">Patient Name:</span> {component.data?.name || 'N/A'}</p>
-                <p><span className="font-medium">Age/Gender:</span> {component.data?.age || 'N/A'}/{component.data?.gender || 'N/A'}</p>
-                <p><span className="font-medium">Patient ID:</span> {component.data?.patientId || 'N/A'}</p>
+                <p><span className="font-medium">Age/Gender:</span> {(component.data?.age || 'N/A')}/{component.data?.gender || 'N/A'}</p>
+                <p><span className="font-medium">Phone:</span> {component.data?.phone || 'N/A'}</p>
+                <p><span className="font-medium">Address:</span> {component.data?.address || 'N/A'}</p>
               </div>
-              <div>
+              <div className="space-y-1">
+                <p><span className="font-medium">Sample ID:</span> {component.data?.sampleId || 'N/A'}</p>
                 <p><span className="font-medium">Collection Date:</span> {component.data?.collectionDate || 'N/A'}</p>
                 <p><span className="font-medium">Report Date:</span> {component.data?.reportDate || 'N/A'}</p>
+              </div>
+              <div className="space-y-1">
+                <p><span className="font-medium">Department:</span> {component.data?.department || 'Pathology'}</p>
               </div>
             </div>
           </div>
@@ -212,30 +389,44 @@ export function ReportDesigner() {
         );
       case 'result-table':
         return (
-          <div className="border border-gray-300 rounded-b overflow-hidden">
-            <div className="bg-blue-700 text-white p-2">
-              <h3 className="font-semibold">TEST RESULTS</h3>
+          <div
+            className="border border-gray-300 rounded overflow-hidden"
+            style={{
+              borderStyle: borderStyle === 'none' ? 'none' : borderStyle,
+              fontSize: componentFontSize ? `${componentFontSize}px` : undefined,
+            }}
+          >
+            <div className="px-3 py-2 font-semibold text-gray-700 border-b bg-gray-50">
+              {component.data?.testName || 'Test Name'}
             </div>
-            <table className="w-full text-sm">
+            <table
+              className="w-full"
+              style={{ fontSize: componentFontSize ? `${componentFontSize}px` : undefined }}
+            >
               <thead>
-                <tr className="bg-gray-100">
-                  <th className="p-2 text-left font-semibold border-r border-gray-300">Test Name</th>
-                  <th className="p-2 text-center font-semibold border-r border-gray-300">Result</th>
+                <tr
+                  className="bg-gray-100"
+                  style={{ backgroundColor: headerColor || undefined }}
+                >
+                  <th className="p-2 text-left font-semibold border-r border-gray-300">Test Parametes</th>
+                  <th className="p-2 text-center font-semibold border-r border-gray-300">Normal Range</th>
                   <th className="p-2 text-center font-semibold border-r border-gray-300">Units</th>
-                  <th className="p-2 text-center font-semibold">Reference Range</th>
+                  <th className="p-2 text-center font-semibold border-r border-gray-300">Result</th>
+                  <th className="p-2 text-center font-semibold">Status</th>
                 </tr>
               </thead>
               <tbody>
                 {component.data?.tests?.map((test: any, index: number) => (
                   <tr key={index} className="border-t border-gray-200 hover:bg-gray-50">
                     <td className="p-2 border-r border-gray-200">{test.test}</td>
-                    <td className="p-2 text-center border-r border-gray-200">{test.result}</td>
+                    <td className="p-2 text-center border-r border-gray-200">{test.normalRange || test.range}</td>
                     <td className="p-2 text-center text-gray-600 border-r border-gray-200">{test.unit}</td>
-                    <td className="p-2 text-center">{test.range}</td>
+                    <td className="p-2 text-center border-r border-gray-200">{test.result}</td>
+                    <td className="p-2 text-center">{test.status}</td>
                   </tr>
                 )) || (
                   <tr>
-                    <td colSpan={4} className="p-4 text-center text-gray-500">No test results available</td>
+                    <td colSpan={5} className="p-4 text-center text-gray-500">No test results available</td>
                   </tr>
                 )}
               </tbody>
@@ -277,65 +468,54 @@ export function ReportDesigner() {
       case 'header-text':
         return (
           <div className="w-full">
-            <div className="bg-blue-700 text-white p-4 rounded-t">
-              <div className="flex justify-between items-center">
-                <div className="w-16 h-16 bg-white flex items-center justify-center rounded">
-                  <span className="text-blue-700 text-xs font-bold">Lab Logo</span>
+            <div
+              className="bg-white text-gray-900 p-4 border-b border-gray-300"
+              style={{
+                borderStyle: borderStyle === 'none' ? 'none' : borderStyle,
+                fontSize: componentFontSize ? `${componentFontSize}px` : undefined,
+              }}
+            >
+              <div className="flex justify-between items-center gap-4">
+                <div className="w-16 h-16 bg-white flex items-center justify-center rounded overflow-hidden">
+                  {derivedLabLogoUrl ? (
+                    <img
+                      src={derivedLabLogoUrl}
+                      alt="Lab Logo"
+                      className="w-full h-full object-contain"
+                    />
+                  ) : (
+                    <span className="text-blue-700 text-xs font-bold">Lab Logo</span>
+                  )}
                 </div>
-                <div className="text-center">
-                  <h1 className="text-xl font-bold uppercase">MEDICAL LABORATORY REPORT</h1>
-                  <p className="text-sm font-medium">Accredited by ISO 15189:2012</p>
+                <div className="text-center flex-1">
+                  <h1 className="text-xl font-bold uppercase">{derivedLabName}</h1>
+                  <p className="text-sm font-medium text-gray-600">Accredited by {derivedLabSubtitle}</p>
                 </div>
-                <div className="w-16"></div> {/* Spacer for alignment */}
+                <div className="w-16" />
               </div>
-            </div>
-            <div className="bg-white p-4 border-l border-r border-b border-gray-300">
-              {/* Patient Info */}
-              <div className="grid grid-cols-3 gap-4 text-sm">
-                <div>
-                  <p className="font-semibold">Name: <span className="font-normal">John Doe</span></p>
-                  <p className="font-semibold">Age/Gender: <span className="font-normal">35 Y / M</span></p>
-                </div>
-                <div>
-                  <p className="font-semibold">ID: <span className="font-normal">LAB-12345</span></p>
-                  <p className="font-semibold">Date: <span className="font-normal">{new Date().toLocaleDateString()}</span></p>
-                </div>
-                <div>
-                  <p className="font-semibold">Referring Physician:</p>
-                  <p className="font-normal">Dr. Sarah Johnson</p>
-                </div>
+              <div className="mt-3 text-xs text-gray-700 flex flex-wrap gap-x-6 gap-y-1 justify-center">
+                <span>
+                  <span className="font-semibold">Phone:</span> {labContact.phone || 'N/A'}
+                </span>
+                <span>
+                  <span className="font-semibold">Email:</span> {labContact.email || 'N/A'}
+                </span>
+                <span>
+                  <span className="font-semibold">Address:</span> {labContact.address || 'N/A'}
+                </span>
               </div>
-            </div>
-          </div>
-        );
-      case 'signature':
-        return (
-          <div className="mt-8 pt-4 border-t border-gray-200">
-            <div className="flex justify-between">
-              <div>
-                <p className="font-medium">Interpretation:</p>
-                <p className="text-sm text-gray-600 mt-1">All values are within normal reference ranges.</p>
-              </div>
-              <div className="text-right">
-                <div className="h-12 border-b border-black w-48 mb-1"></div>
-                <p className="text-sm font-medium">{component.data?.name || 'Dr. Pathologist'}</p>
-                <p className="text-xs text-gray-600">{component.data?.title || 'Pathologist'}</p>
-                <p className="text-xs text-gray-500">{component.data?.license || 'MD, Board Certified'}</p>
-                <p className="text-xs text-gray-500 mt-1">Date: {component.data?.date || new Date().toLocaleDateString()}</p>
-              </div>
-            </div>
-            <div className="mt-4 text-xs text-center text-gray-500">
-              <p>This is an electronically generated report and does not require a physical signature.</p>
-              <p className="mt-1">If you have any questions, please contact our lab at (555) 123-4567.</p>
             </div>
           </div>
         );
       
       case 'notes':
         return (
-          <div className="p-4 border rounded-lg bg-yellow-50">
-            <h3 className="font-semibold mb-2">Notes</h3>
-            <p>Results reviewed and verified by laboratory staff.</p>
+          <div
+            className="p-4 border rounded-lg bg-white"
+            style={{ fontSize: componentFontSize ? `${componentFontSize}px` : undefined }}
+          >
+            <h3 className="font-semibold mb-2">Clinical Interpretation</h3>
+            <p>Clinical interpretation of the above results will appear here.</p>
           </div>
         );
       default:
@@ -344,35 +524,14 @@ export function ReportDesigner() {
   };
 
   return (
-    <div className="h-screen flex flex-col bg-gray-100">
-      {/* Header */}
-      <div className="bg-blue-700 text-white shadow-sm">
-        <div className="container mx-auto px-4 py-3 flex justify-between items-center">
-          <h1 className="text-xl font-semibold text-white">Report Designer</h1>
-          <div className="flex space-x-2">
-            <Button variant="outline" className="border-gray-300 text-gray-700 hover:bg-gray-50">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clipRule="evenodd" />
-              </svg>
-              Save
-            </Button>
-            <Button className="bg-blue-600 hover:bg-blue-700">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clipRule="evenodd" />
-              </svg>
-              Export
-            </Button>
-          </div>
-        </div>
-      </div>
-
-      <div className="flex flex-1 overflow-hidden">
-        {/* Left Panel - Components */}
-        <div className="w-64 bg-gray-50 border-r border-gray-300 overflow-y-auto">
+    <div className="min-h-screen flex flex-col bg-gray-100">
+      <div className="flex flex-1">
+        {/* Left Panel - Components + Global Styling */}
+        <div className="w-64 bg-gray-50 border-r border-gray-300 overflow-y-auto flex flex-col">
           <div className="p-3 bg-gray-200 border-b border-gray-300">
             <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wider">Components</h2>
           </div>
-          <div className="p-2 space-y-1 bg-white">
+          <div className="p-2 space-y-1 bg-white border-b border-gray-200">
             {components.map((component) => (
               <div
                 key={component.id}
@@ -386,126 +545,50 @@ export function ReportDesigner() {
               </div>
             ))}
           </div>
-        </div>
-
-        {/* Center Panel - Live Preview */}
-        <div 
-          className="flex-1 overflow-auto bg-white p-6"
-          onDrop={handleDrop}
-          onDragOver={handleDragOver}
-          onClick={() => setSelectedComponent(null)}
-        >
-          <div className="bg-white p-8 max-w-4xl mx-auto border border-gray-200 shadow-sm">
-            {reportComponents.length === 0 ? (
-              <div className="text-center text-gray-400 p-8 border-2 border-dashed rounded-lg">
-                Drag components here to build your report
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {reportComponents.map((component) => (
-                  <div 
-                    key={component.id} 
-                    className={`relative group transition-all duration-200 ${selectedComponent?.id === component.id ? 'ring-2 ring-blue-500 rounded-lg' : ''}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setSelectedComponent(component === selectedComponent ? null : component);
-                    }}
-                  >
-                    {renderComponent(component)}
-                    <button 
-                      className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setReportComponents(reportComponents.filter(c => c.id !== component.id));
-                        if (selectedComponent?.id === component.id) {
-                          setSelectedComponent(null);
-                        }
-                      }}
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Right Panel - Settings */}
-        <div className="w-80 bg-white border-l border-gray-200 overflow-y-auto">
-          <div className="p-4 border-b border-gray-200">
-            <h2 className="text-sm font-medium text-gray-700 uppercase tracking-wider">
-              {selectedComponent ? `${selectedComponent.label} Settings` : 'No Component Selected'}
-            </h2>
-          </div>
-          <div className="p-4">
-          {selectedComponent?.type === 'logo' ? (
-            <div className="space-y-4">
-              <h3 className="font-medium">Logo Settings</h3>
-              <div>
-                <Label>Logo Image</Label>
-                <div className="mt-2">
-                  <input
-                    type="file"
-                    ref={fileInputRef}
-                    onChange={handleLogoUpload}
-                    accept="image/*"
-                    className="hidden"
-                  />
-                  <Button
-                    variant="outline"
-                    className="w-full"
-                    onClick={() => fileInputRef.current?.click()}
-                  >
-                    {selectedComponent.data?.imageUrl ? 'Change Logo' : 'Upload Logo'}
-                  </Button>
-                </div>
-              </div>
-              <div>
-                <Label>Size: {selectedComponent.data?.size || 100}px</Label>
-                <Slider
-                  min={50}
-                  max={300}
-                  step={10}
-                  value={[selectedComponent.data?.size || 100]}
-                  onValueChange={(value) => updateLogoSetting('size', value[0])}
-                  className="mt-2"
-                />
-              </div>
-              <div>
-                <Label>Alignment</Label>
-                <Select
-                  value={selectedComponent.data?.alignment || 'left'}
-                  onValueChange={(value) => updateLogoSetting('alignment', value as 'left' | 'center' | 'right')}
-                >
-                  <SelectTrigger className="mt-2">
-                    <SelectValue placeholder="Select alignment" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="left">Left</SelectItem>
-                    <SelectItem value="center">Center</SelectItem>
-                    <SelectItem value="right">Right</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-          ) : (
+          {/* Global Styling Section */}
+          <div className="border-t border-gray-200 bg-white p-3">
+            <h2 className="text-xs font-semibold text-gray-600 uppercase tracking-wider mb-2">Styling</h2>
             <Tabs value={activeTab} onValueChange={setActiveTab}>
-              <TabsList className="grid w-full grid-cols-2">
+              <TabsList className="grid w-full grid-cols-1 mb-2">
                 <TabsTrigger value="style">Style</TabsTrigger>
-                <TabsTrigger value="layout">Layout</TabsTrigger>
               </TabsList>
-            <TabsContent value="style" className="mt-4">
-              <div className="space-y-4">
+              <TabsContent value="style" className="mt-2 space-y-4">
                 <div>
-                  <Label htmlFor="fontSize">Font Size: {fontSize}px</Label>
+                  <Label htmlFor="fontSize">
+                    Font Size: {(selectedComponent?.data?.fontSize as number | undefined) ?? fontSize}px
+                  </Label>
                   <Slider
                     id="fontSize"
                     min={8}
                     max={24}
                     step={1}
-                    value={[fontSize]}
-                    onValueChange={(value) => setFontSize(value[0])}
+                    value={[(selectedComponent?.data?.fontSize as number | undefined) ?? fontSize]}
+                    onValueChange={(value) => {
+                      if (readOnly) {
+                        toast({
+                          title: 'Not allowed',
+                          description: 'You only have view permission for Report Designer.',
+                          variant: 'destructive',
+                        });
+                        return;
+                      }
+                      const newSize = value[0];
+                      if (selectedComponent) {
+                        setReportComponents(prev =>
+                          prev.map(c =>
+                            c.id === selectedComponent.id
+                              ? { ...c, data: { ...(c.data || {}), fontSize: newSize } }
+                              : c
+                          )
+                        );
+                        setSelectedComponent(prev =>
+                          prev ? { ...prev, data: { ...(prev.data || {}), fontSize: newSize } } : prev
+                        );
+                      } else {
+                        setFontSize(newSize);
+                      }
+                    }}
+                    disabled={readOnly}
                     className="mt-2"
                   />
                 </div>
@@ -516,20 +599,55 @@ export function ReportDesigner() {
                       type="color"
                       id="headerColor"
                       value={headerColor}
-                      onChange={(e) => setHeaderColor(e.target.value)}
+                      onChange={(e) => {
+                        if (readOnly) {
+                          toast({
+                            title: 'Not allowed',
+                            description: 'You only have view permission for Report Designer.',
+                            variant: 'destructive',
+                          });
+                          return;
+                        }
+                        setHeaderColor(e.target.value);
+                      }}
+                      disabled={readOnly}
                       className="w-10 h-10 p-1 bg-white border border-gray-200 rounded-md mr-2"
                     />
                     <Input
                       value={headerColor}
-                      onChange={(e) => setHeaderColor(e.target.value)}
+                      onChange={(e) => {
+                        if (readOnly) {
+                          toast({
+                            title: 'Not allowed',
+                            description: 'You only have view permission for Report Designer.',
+                            variant: 'destructive',
+                          });
+                          return;
+                        }
+                        setHeaderColor(e.target.value);
+                      }}
+                      disabled={readOnly}
                       className="w-24"
                     />
                   </div>
                 </div>
                 <div>
                   <Label htmlFor="borderStyle">Border Style</Label>
-                  <Select value={borderStyle} onValueChange={setBorderStyle}>
-                    <SelectTrigger className="mt-2">
+                  <Select
+                    value={borderStyle}
+                    onValueChange={(v) => {
+                      if (readOnly) {
+                        toast({
+                          title: 'Not allowed',
+                          description: 'You only have view permission for Report Designer.',
+                          variant: 'destructive',
+                        });
+                        return;
+                      }
+                      setBorderStyle(v);
+                    }}
+                  >
+                    <SelectTrigger className="mt-2" disabled={readOnly}>
                       <SelectValue placeholder="Select border style" />
                     </SelectTrigger>
                     <SelectContent>
@@ -540,52 +658,89 @@ export function ReportDesigner() {
                     </SelectContent>
                   </Select>
                 </div>
-              </div>
-            </TabsContent>
-            <TabsContent value="layout" className="mt-4">
-              <div className="space-y-4">
-                <div>
-                  <Label htmlFor="reportTitle">Report Title</Label>
-                  <Input
-                    id="reportTitle"
-                    value={reportTitle}
-                    onChange={(e) => setReportTitle(e.target.value)}
-                    className="mt-2"
-                  />
-                </div>
-                <div>
-                  <Label>Page Orientation</Label>
-                  <div className="flex space-x-2 mt-2">
-                    <Button variant="outline" className="flex-1">
-                      Portrait
-                    </Button>
-                    <Button variant="outline" className="flex-1">
-                      Landscape
-                    </Button>
-                  </div>
-                </div>
-                <div>
-                  <Label>Page Size</Label>
-                  <Select>
-                    <SelectTrigger className="mt-2">
-                      <SelectValue placeholder="A4 (210 × 297 mm)" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="a4">A4 (210 × 297 mm)</SelectItem>
-                      <SelectItem value="letter">Letter (8.5 × 11 in)</SelectItem>
-                      <SelectItem value="legal">Legal (8.5 × 14 in)</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-            </TabsContent>
+              </TabsContent>
             </Tabs>
-          )}
+          </div>
+        </div>
+
+        {/* Center Panel - Live Preview */}
+        <div 
+          className="flex-1 overflow-auto bg-gray-100 p-6 flex flex-col items-center"
+          onDrop={handleDrop}
+          onDragOver={handleDragOver}
+          onClick={() => {
+            if (readOnly) return;
+            setSelectedComponent(null);
+          }}
+        >
+          <div className="w-full max-w-5xl flex justify-between items-center mb-4">
+            <h2 className="text-sm font-semibold text-gray-700">Live Preview</h2>
+            <Button size="sm" onClick={handleSaveTemplate} disabled={readOnly}>
+              Save as Report Template
+            </Button>
+          </div>
+          {/* A4-sized preview container (210mm x 297mm, scaled to pixels) */}
+          <div
+            className="bg-white p-8 border border-gray-200 shadow-sm"
+            style={{
+              width: '794px',   // ~210mm at 96 DPI
+              height: '1123px', // ~297mm at 96 DPI
+              maxWidth: '100%',
+              fontSize: `${fontSize}px`,
+            }}
+          >
+            {reportComponents.length === 0 ? (
+              <div className="text-center text-gray-400 p-8 border-2 border-dashed rounded-lg">
+                Drag components here to build your report
+              </div>
+            ) : (
+              <div className="flex flex-col h-full">
+                <div className="space-y-4">
+                  {reportComponents.map((component) => (
+                    <div 
+                      key={component.id} 
+                      className={`relative group transition-all duration-200 ${selectedComponent?.id === component.id ? 'ring-2 ring-blue-500 rounded-lg' : ''}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (readOnly) return;
+                        setSelectedComponent(component === selectedComponent ? null : component);
+                      }}
+                    >
+                      {renderComponent(component)}
+                      <button 
+                        className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (readOnly) {
+                            toast({
+                              title: 'Not allowed',
+                              description: 'You only have view permission for Report Designer.',
+                              variant: 'destructive',
+                            });
+                            return;
+                          }
+                          setReportComponents(reportComponents.filter(c => c.id !== component.id));
+                          if (selectedComponent?.id === component.id) {
+                            setSelectedComponent(null);
+                          }
+                        }}
+                        disabled={readOnly}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-auto pt-2 border-t text-[12px] text-center text-black">
+                  System Generated Report, No Signature Required. Approved By Consultant. Not Valid For Any Court Of Law.
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>
-  </div>
-);
+  );
 };
 
 export default ReportDesigner;

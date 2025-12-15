@@ -26,7 +26,6 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import DashboardStats from "@/components/DashboardStats";
-import { isDemoMode, getMockRecentSamplesMapped, getMockInventory, getMockLabKpis } from "@/lib/mockData";
 
 interface LabTechnicianDashboardProps {
   onViewChange: (view: CurrentView) => void;
@@ -49,10 +48,11 @@ const LabTechnicianDashboard = ({ onViewChange }: LabTechnicianDashboardProps) =
 
   // For demo/mock data: assume completed samples have today's date
   const now = new Date();
+  const todayKeyUtc = now.toISOString().slice(0, 10); // YYYY-MM-DD in UTC
   const isToday = (dateObj: Date) => {
-    return dateObj.getDate() === now.getDate() &&
-           dateObj.getMonth() === now.getMonth() &&
-           dateObj.getFullYear() === now.getFullYear();
+    if (!(dateObj instanceof Date) || isNaN(dateObj.getTime())) return false;
+    const key = dateObj.toISOString().slice(0, 10);
+    return key === todayKeyUtc;
   };
 
   // Compute dynamic stats
@@ -61,10 +61,6 @@ const LabTechnicianDashboard = ({ onViewChange }: LabTechnicianDashboardProps) =
   const [inventory, setInventory] = useState<any[]>([]);
 
   const fetchSamplesCb = useCallback(() => {
-    if (isDemoMode()) {
-      setRecentSamples(getMockRecentSamplesMapped());
-      return;
-    }
     api.get(`/labtech/samples`)
       .then(({ data }) => {
         const mapped = (data || [])
@@ -87,10 +83,6 @@ const LabTechnicianDashboard = ({ onViewChange }: LabTechnicianDashboardProps) =
   }, []);
 
   const fetchInventoryCb = useCallback(() => {
-    if (isDemoMode()) {
-      setInventory(getMockInventory());
-      return;
-    }
     const token = localStorage.getItem('token');
     fetch('/api/lab/inventory/inventory', { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.ok ? r.json() : [])
@@ -99,10 +91,6 @@ const LabTechnicianDashboard = ({ onViewChange }: LabTechnicianDashboardProps) =
   }, []);
 
   const fetchKpisCb = useCallback(() => {
-    if (isDemoMode()) {
-      setKpis(getMockLabKpis());
-      return;
-    }
     api.get(`/lab/dashboard/kpis`)
       .then(({ data }) => { setKpis(data); })
       .catch(() => {});
@@ -163,7 +151,7 @@ const LabTechnicianDashboard = ({ onViewChange }: LabTechnicianDashboardProps) =
   // Today's tests (samples created today)
   const todayTestsCount = recentSamples.filter((s:any)=> {
     const d = s.createdAt instanceof Date ? s.createdAt : new Date(s.createdAt);
-    return d.getDate()===now.getDate() && d.getMonth()===now.getMonth() && d.getFullYear()===now.getFullYear();
+    return isToday(d);
   }).length;
 
   // Inventory KPIs

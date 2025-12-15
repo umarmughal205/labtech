@@ -29,15 +29,68 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { 
   Search, 
   Filter, 
   Eye, 
   Edit, 
+  Trash2,
   ExternalLink, 
-  X 
+  X,
+  ChevronDown,
 } from "lucide-react";
 import { api } from "@/lab lib/api";
+
+function splitCommaOutsideParens(input: string): string[] {
+  const out: string[] = [];
+  let buf = '';
+  let depth = 0;
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+    if (ch === '(') depth++;
+    if (ch === ')' && depth > 0) depth--;
+    if (ch === ',' && depth === 0) {
+      const v = buf.trim();
+      if (v) out.push(v);
+      buf = '';
+      continue;
+    }
+    buf += ch;
+  }
+  const last = buf.trim();
+  if (last) out.push(last);
+  return out;
+}
+
+function getModulePermission(moduleName: string): { view: boolean; edit: boolean; delete: boolean } {
+  try {
+    const roleRaw = typeof window !== 'undefined' ? window.localStorage.getItem('role') : null;
+    const role = String(roleRaw || '').trim().toLowerCase();
+    const isAdmin = new Set(['admin', 'administrator', 'lab supervisor', 'lab-supervisor', 'supervisor']).has(role);
+    if (isAdmin) {
+      return { view: true, edit: true, delete: true };
+    }
+    const raw = typeof window !== 'undefined' ? window.localStorage.getItem('permissions') : null;
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (!Array.isArray(parsed)) {
+      return { view: true, edit: true, delete: true };
+    }
+    const wanted = String(moduleName || '').trim().toLowerCase();
+    const found = parsed.find((p: any) => String(p?.name || '').trim().toLowerCase() === wanted);
+    if (!found) {
+      return { view: true, edit: false, delete: false };
+    }
+    return { view: !!found.view, edit: !!found.edit, delete: !!found.delete };
+  } catch {
+    return { view: true, edit: true, delete: true };
+  }
+}
 
 const normalizeSampleStatus = (raw: string | undefined | null): "collected" | "processing" | "completed" => {
   const s = String(raw || "").toLowerCase();
@@ -48,6 +101,7 @@ const normalizeSampleStatus = (raw: string | undefined | null): "collected" | "p
 
 const SamplesPage: React.FC = () => {
   const { toast } = useToast();
+  const modulePerm = getModulePermission('Samples');
   
   // Sample Management state
   const [searchTerm, setSearchTerm] = useState("");
@@ -70,6 +124,8 @@ const SamplesPage: React.FC = () => {
   const [showViewModal, setShowViewModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [selectedSample, setSelectedSample] = useState<any>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [pendingDeleteSample, setPendingDeleteSample] = useState<any>(null);
   const [editingSample, setEditingSample] = useState({
     patientName: "",
     test: "",
@@ -101,6 +157,7 @@ const SamplesPage: React.FC = () => {
           patientName: s.patientName || "",
           test: testsLabel,
           status: statusNorm,
+          priority: (s?.priority || 'normal'),
           collectionTime: s.createdAt
             ? new Date(s.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
             : "",
@@ -116,9 +173,9 @@ const SamplesPage: React.FC = () => {
   const getStatusBadge = (status: string) => {
     const norm = normalizeSampleStatus(status);
     const statusConfig: Record<"collected" | "processing" | "completed", { color: string; text: string }> = {
-      collected: { color: "bg-blue-100 text-blue-800", text: "Collected" },
-      processing: { color: "bg-yellow-100 text-yellow-800", text: "Processing" },
-      completed: { color: "bg-green-100 text-green-800", text: "Completed" },
+      collected: { color: "bg-blue-600 text-white", text: "Collected" },
+      processing: { color: "bg-yellow-600 text-white", text: "Processing" },
+      completed: { color: "bg-green-600 text-white", text: "Completed" },
     };
     const config = statusConfig[norm];
     return (
@@ -216,6 +273,10 @@ const SamplesPage: React.FC = () => {
   };
 
   const handleEditSample = (sample: any) => {
+    if (!modulePerm.edit) {
+      toast({ title: 'Not allowed', description: "You only have view permission for Samples.", variant: 'destructive' });
+      return;
+    }
     setSelectedSample(sample);
     setEditingSample({
       patientName: sample.patientName || "",
@@ -228,10 +289,62 @@ const SamplesPage: React.FC = () => {
     setShowEditModal(true);
   };
 
+  const handleDeleteSample = async (sample: any) => {
+    if (!modulePerm.delete) {
+      toast({ title: 'Not allowed', description: "You don't have delete permission for Samples.", variant: 'destructive' });
+      return;
+    }
+
+    const sampleId = sample?._id || sample?.id;
+    if (!sampleId) {
+      toast({ title: 'Error', description: 'Sample id not found.', variant: 'destructive' });
+      return;
+    }
+
+    setPendingDeleteSample(sample);
+    setShowDeleteConfirm(true);
+    return;
+  };
+
+  const confirmDeleteSample = async () => {
+    const sample = pendingDeleteSample;
+    setShowDeleteConfirm(false);
+    setPendingDeleteSample(null);
+
+    if (!sample) return;
+    if (!modulePerm.delete) {
+      toast({ title: 'Not allowed', description: "You don't have delete permission for Samples.", variant: 'destructive' });
+      return;
+    }
+
+    const sampleId = sample?._id || sample?.id;
+    if (!sampleId) {
+      toast({ title: 'Error', description: 'Sample id not found.', variant: 'destructive' });
+      return;
+    }
+
+    try {
+      const token = localStorage.getItem('token');
+      await api.delete(`/labtech/samples/${sampleId}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      });
+
+      toast({ title: 'Deleted', description: 'Sample deleted successfully.' });
+      await loadSamplesFromBackend();
+    } catch (err) {
+      console.error('Failed to delete sample', err);
+      toast({ title: 'Error', description: 'Failed to delete sample.', variant: 'destructive' });
+    }
+  };
+
   // export/print functionality removed from SamplesPage actions
 
   // Add Sample Modal handlers
   const openAddSampleModal = () => {
+    if (!modulePerm.edit) {
+      toast({ title: 'Not allowed', description: "You only have view permission for Samples.", variant: 'destructive' });
+      return;
+    }
     setNewSample({
       patientName: "",
       test: "",
@@ -242,6 +355,10 @@ const SamplesPage: React.FC = () => {
   };
 
   const handleAddSample = async () => {
+    if (!modulePerm.edit) {
+      toast({ title: 'Not allowed', description: "You only have view permission for Samples.", variant: 'destructive' });
+      return;
+    }
     if (!newSample.patientName || !newSample.test || !newSample.assignedAnalyzer) {
       toast({
         title: "Error",
@@ -306,6 +423,10 @@ const SamplesPage: React.FC = () => {
 
   // Edit Sample Modal handlers
   const handleUpdateSample = async () => {
+    if (!modulePerm.edit) {
+      toast({ title: 'Not allowed', description: "You only have view permission for Samples.", variant: 'destructive' });
+      return;
+    }
     if (!editingSample.patientName) {
       toast({
         title: "Error",
@@ -502,8 +623,9 @@ const SamplesPage: React.FC = () => {
                   <TableHead>Sample ID</TableHead>
                   <TableHead>Patient Name</TableHead>
                   <TableHead>Test(s)</TableHead>
-                  <TableHead>Status</TableHead>
+                  <TableHead>Priority</TableHead>
                   <TableHead>Collection Time</TableHead>
+                  <TableHead>Status</TableHead>
                   <TableHead>Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -512,9 +634,44 @@ const SamplesPage: React.FC = () => {
                   <TableRow key={sample.barcode}>
                     <TableCell className="font-medium">{sample.barcode}</TableCell>
                     <TableCell>{sample.patientName}</TableCell>
-                    <TableCell>{sample.test}</TableCell>
-                    <TableCell>{getStatusBadge(sample.status)}</TableCell>
+                    <TableCell>
+                      {(() => {
+                        const names: string[] = [];
+                        if (Array.isArray((sample as any).tests)) {
+                          for (const t of (sample as any).tests) {
+                            const n = String((t && (t.name || t.test)) || t || '').trim();
+                            if (n) names.push(n);
+                          }
+                        }
+                        if (typeof (sample as any).test === 'string') {
+                          splitCommaOutsideParens(String((sample as any).test)).forEach((v) => v && names.push(v));
+                        }
+                        const uniq = Array.from(new Set(names.map((n) => n.toLowerCase())))
+                          .map((lower) => names.find((n) => n.toLowerCase() === lower) || lower);
+                        const list = uniq.filter(Boolean);
+                        if (list.length === 0) return <span>-</span>;
+                        return (
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="outline" size="sm" className="h-8 px-2">
+                                {list.length} {list.length === 1 ? 'test' : 'tests'}
+                                <ChevronDown className="ml-2 h-4 w-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="start" className="max-h-64 overflow-auto">
+                              {list.map((n, idx) => (
+                                <DropdownMenuItem key={`${n}-${idx}`} onSelect={(e) => e.preventDefault()}>
+                                  {n}
+                                </DropdownMenuItem>
+                              ))}
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        );
+                      })()}
+                    </TableCell>
+                    <TableCell className="capitalize">{sample.priority || 'normal'}</TableCell>
                     <TableCell>{sample.collectionTime}</TableCell>
+                    <TableCell>{getStatusBadge(sample.status)}</TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2">
                         <Button
@@ -532,8 +689,19 @@ const SamplesPage: React.FC = () => {
                           className="h-8 w-8"
                           onClick={() => handleEditSample(sample)}
                           title="Edit sample"
+                          disabled={!modulePerm.edit}
                         >
                           <Edit className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-red-600 hover:text-red-700"
+                          onClick={() => handleDeleteSample(sample)}
+                          title="Delete sample"
+                          disabled={!modulePerm.delete}
+                        >
+                          <Trash2 className="h-4 w-4" />
                         </Button>
                       </div>
                     </TableCell>
@@ -541,7 +709,7 @@ const SamplesPage: React.FC = () => {
                 ))}
                 {filteredSamples.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={6} className="py-8 text-center text-gray-500">
+                    <TableCell colSpan={7} className="py-8 text-center text-gray-500">
                       <div className="flex flex-col items-center justify-center gap-2">
                         <Search className="w-10 h-10 text-gray-300" />
                         <p>No samples available yet</p>
@@ -634,6 +802,31 @@ const SamplesPage: React.FC = () => {
             </Button>
             <Button onClick={handleAddSample} disabled={isSubmittingNewSample}>
               {isSubmittingNewSample ? "Adding..." : "Add Sample"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+        <DialogContent className="sm:max-w-[400px]">
+          <DialogHeader>
+            <DialogTitle>Delete Sample</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete this sample permanently?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowDeleteConfirm(false);
+                setPendingDeleteSample(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={confirmDeleteSample}>
+              Delete
             </Button>
           </DialogFooter>
         </DialogContent>

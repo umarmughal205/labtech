@@ -11,6 +11,7 @@ const testRoutes = require('./src/routes/testRoutes');
 const settingsRoutes = require('./src/routes/settingsRoutes');
 const sampleRoutes = require('./src/routes/sampleRoutes');
 const dashboardRoutes = require('./src/routes/dashboardRoutes');
+const userAdminRoutes = require('./src/routes/userAdminRoutes');
 
 const app = express();
 
@@ -27,5 +28,6 @@ app.use('/api/tests', testRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/labtech/samples', sampleRoutes);
 app.use('/api/lab/dashboard', dashboardRoutes);
+app.use('/api/admin', userAdminRoutes);
 
 app.listen(PORT, () => console.log(`API running on port ${PORT}`));

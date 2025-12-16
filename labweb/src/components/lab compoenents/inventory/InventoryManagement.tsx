@@ -378,6 +378,30 @@ const InventoryManagement = () => {
 
       setInventory((prev) => [...prev, created]);
 
+      // Also record this initial stock as an expense so it appears in Expenses UI and Finance ledger
+      try {
+        const packsNum = Number(newItem.packs ?? payload.packs) || 0;
+        const itemsPerPackNum = Number(newItem.itemsPerPack ?? payload.itemsPerPack) || 0;
+        const buyPricePerPackNum = Number(newItem.buyPricePerPack ?? payload.buyPricePerPack) || 0;
+        const totalUnits = packsNum * itemsPerPackNum;
+        const amount = packsNum * buyPricePerPackNum;
+
+        if (packsNum > 0 && buyPricePerPackNum > 0 && totalUnits > 0) {
+          await api.post("/lab/expenses", {
+            category: "Supplies",
+            description: created.name || newItem.name || "Inventory purchase",
+            amount,
+            date: new Date().toISOString(),
+            supplierName: created.supplier || newItem.supplier || undefined,
+            inventoryItemId: created._id,
+            inventoryItemName: created.name || newItem.name,
+            quantity: totalUnits,
+          });
+        }
+      } catch (expenseErr) {
+        console.error("Failed to create expense for new inventory item", expenseErr);
+      }
+
       toast({
         title: "Item Added",
         description: `${created.name} has been added to inventory.`,

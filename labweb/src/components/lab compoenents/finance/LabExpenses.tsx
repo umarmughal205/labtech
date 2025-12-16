@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Download, DollarSign, Filter, Search } from "lucide-react";
+import { Download, DollarSign, Filter, Search, Edit3, Trash2 } from "lucide-react";
 import { api } from "@/lib/api";
 
 interface ExpenseRecord {
@@ -14,7 +14,9 @@ interface ExpenseRecord {
   amount: number;
   date: Date;
   reference?: string;
+  supplierId?: string;
   supplierName?: string;
+  inventoryItemId?: string;
   inventoryItemName?: string;
   quantity?: number;
 }
@@ -38,6 +40,7 @@ const LabExpenses = () => {
   const [selectedSupplierId, setSelectedSupplierId] = useState<string>("");
   const [selectedItemId, setSelectedItemId] = useState<string>("");
   const [quantity, setQuantity] = useState<string>("1");
+  const [editingExpense, setEditingExpense] = useState<ExpenseRecord | null>(null);
 
   // pagination
   const [page, setPage] = useState(1);
@@ -55,7 +58,9 @@ const LabExpenses = () => {
           amount: Number(e.amount) || 0,
           date: e.date ? new Date(e.date) : new Date(),
           reference: e.reference,
+          supplierId: e.supplierId ? String(e.supplierId) : undefined,
           supplierName: e.supplierName || "",
+          inventoryItemId: e.inventoryItemId ? String(e.inventoryItemId) : undefined,
           inventoryItemName: e.inventoryItemName || "",
           quantity: typeof e.quantity === "number" ? e.quantity : undefined,
         }));
@@ -122,24 +127,27 @@ const LabExpenses = () => {
     URL.revokeObjectURL(url);
   };
 
-  const addExpense = async () => {
+  const saveExpense = async () => {
     if (!newExpense.description || !newExpense.amount) return;
     const supplier = suppliers.find((s: any) => String(s._id) === selectedSupplierId);
     const item = inventoryItems.find((i: any) => String(i._id) === selectedItemId);
     const qtyNum = Math.max(0, parseFloat(quantity) || 0);
-    const payload = {
+    const linkToSupplier = newExpense.category === "Supplies";
+    const payload: any = {
       category: newExpense.category,
       description: newExpense.description,
       amount: parseFloat(newExpense.amount),
       date: new Date().toISOString(),
-      supplierId: supplier ? String(supplier._id) : undefined,
-      supplierName: supplier ? (supplier.name || supplier.contactPerson || "") : undefined,
-      inventoryItemId: item ? String(item._id) : undefined,
-      inventoryItemName: item ? (item.name || "") : undefined,
-      quantity: qtyNum || undefined,
+      supplierId: linkToSupplier && supplier ? String(supplier._id) : undefined,
+      supplierName: linkToSupplier && supplier ? (supplier.name || supplier.contactPerson || "") : undefined,
+      inventoryItemId: linkToSupplier && item ? String(item._id) : undefined,
+      inventoryItemName: linkToSupplier && item ? (item.name || "") : undefined,
+      quantity: linkToSupplier ? (qtyNum || undefined) : undefined,
     };
     try {
-      const res = await api.post("/lab/expenses", payload);
+      const res = editingExpense
+        ? await api.put(`/lab/expenses/${editingExpense.id}`, payload)
+        : await api.post("/lab/expenses", payload);
       const created: any = res.data || {};
       const rec: ExpenseRecord = {
         id: String(created._id),
@@ -148,23 +156,64 @@ const LabExpenses = () => {
         amount: Number(created.amount ?? payload.amount) || 0,
         date: created.date ? new Date(created.date) : new Date(),
         reference: created.reference,
+        supplierId: created.supplierId || payload.supplierId,
         supplierName: created.supplierName || payload.supplierName,
+        inventoryItemId: created.inventoryItemId || payload.inventoryItemId,
         inventoryItemName: created.inventoryItemName || payload.inventoryItemName,
         quantity: typeof created.quantity === "number" ? created.quantity : payload.quantity,
       };
-      setExpenses((prev) => [rec, ...prev]);
+      setExpenses((prev) => {
+        if (!editingExpense) {
+          return [rec, ...prev];
+        }
+        return prev.map((e) => (e.id === editingExpense.id ? rec : e));
+      });
       setNewExpense({ description: "", amount: "", category: categories[0] });
       setSelectedSupplierId("");
       setSelectedItemId("");
       setQuantity("1");
+      setEditingExpense(null);
       setIsAddOpen(false);
     } catch (err) {
       console.error("Failed to create lab expense", err as any);
     }
   };
 
+  const startAdd = () => {
+    setEditingExpense(null);
+    setNewExpense({ description: "", amount: "", category: categories[0] });
+    setSelectedSupplierId("");
+    setSelectedItemId("");
+    setQuantity("1");
+    setIsAddOpen(true);
+  };
+
+  const startEdit = (exp: ExpenseRecord) => {
+    setEditingExpense(exp);
+    setNewExpense({
+      description: exp.description,
+      amount: String(exp.amount),
+      category: exp.category || categories[0],
+    });
+    setSelectedSupplierId(exp.supplierId ?? "");
+    setSelectedItemId(exp.inventoryItemId ?? "");
+    setQuantity(exp.quantity != null ? String(exp.quantity) : "1");
+    setIsAddOpen(true);
+  };
+
+  const handleDelete = async (id: string) => {
+    const confirmed = window.confirm("Are you sure you want to delete this expense?");
+    if (!confirmed) return;
+    try {
+      await api.delete(`/lab/expenses/${id}`);
+      setExpenses((prev) => prev.filter((e) => e.id !== id));
+    } catch (err) {
+      console.error("Failed to delete lab expense", err as any);
+    }
+  };
+
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 md:p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Lab Expenses</h1>
@@ -174,11 +223,11 @@ const LabExpenses = () => {
           <Button variant="outline" onClick={exportCsv}><Download className="w-4 h-4 mr-2"/>Export</Button>
           <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
             <DialogTrigger asChild>
-              <Button><DollarSign className="w-4 h-4 mr-2"/>Add Expense</Button>
+              <Button onClick={startAdd}><DollarSign className="w-4 h-4 mr-2"/>{editingExpense ? "Edit Expense" : "Add Expense"}</Button>
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
-                <DialogTitle>Add New Expense</DialogTitle>
+                <DialogTitle>{editingExpense ? "Edit Expense" : "Add New Expense"}</DialogTitle>
               </DialogHeader>
               <div className="grid gap-4 py-4">
                 <div className="grid grid-cols-4 items-center gap-4">
@@ -189,45 +238,49 @@ const LabExpenses = () => {
                   <Label htmlFor="amount" className="text-right">Amount (PKR)</Label>
                   <Input id="amount" type="number" className="col-span-3" value={newExpense.amount} onChange={(e)=>setNewExpense({...newExpense, amount: e.target.value})} />
                 </div>
-                <div className="grid grid-cols-4 items-center gap-4">
-                  <Label htmlFor="supplier" className="text-right">Supplier</Label>
-                  <select
-                    id="supplier"
-                    className="col-span-3 border rounded-md p-2"
-                    value={selectedSupplierId}
-                    onChange={(e)=>setSelectedSupplierId(e.target.value)}
-                  >
-                    <option value="">-- Optional: Select supplier --</option>
-                    {suppliers.map((s:any) => (
-                      <option key={s._id} value={s._id}>{s.name || s.contactPerson || s.contactInfo}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="grid grid-cols-4 items-center gap-4">
-                  <Label htmlFor="item" className="text-right">Inventory Item</Label>
-                  <select
-                    id="item"
-                    className="col-span-3 border rounded-md p-2"
-                    value={selectedItemId}
-                    onChange={(e)=>setSelectedItemId(e.target.value)}
-                  >
-                    <option value="">-- Optional: Select item --</option>
-                    {inventoryItems.map((it:any) => (
-                      <option key={it._id} value={it._id}>{it.name}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="grid grid-cols-4 items-center gap-4">
-                  <Label htmlFor="qty" className="text-right">Quantity</Label>
-                  <Input
-                    id="qty"
-                    type="number"
-                    className="col-span-3"
-                    value={quantity}
-                    onChange={(e)=>setQuantity(e.target.value)}
-                    min={0}
-                  />
-                </div>
+                {newExpense.category === "Supplies" && (
+                  <>
+                    <div className="grid grid-cols-4 items-center gap-4">
+                      <Label htmlFor="supplier" className="text-right">Supplier</Label>
+                      <select
+                        id="supplier"
+                        className="col-span-3 border rounded-md p-2"
+                        value={selectedSupplierId}
+                        onChange={(e)=>setSelectedSupplierId(e.target.value)}
+                      >
+                        <option value="">-- Optional: Select supplier --</option>
+                        {suppliers.map((s:any) => (
+                          <option key={s._id} value={s._id}>{s.name || s.contactPerson || s.contactInfo}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="grid grid-cols-4 items-center gap-4">
+                      <Label htmlFor="item" className="text-right">Inventory Item</Label>
+                      <select
+                        id="item"
+                        className="col-span-3 border rounded-md p-2"
+                        value={selectedItemId}
+                        onChange={(e)=>setSelectedItemId(e.target.value)}
+                      >
+                        <option value="">-- Optional: Select item --</option>
+                        {inventoryItems.map((it:any) => (
+                          <option key={it._id} value={it._id}>{it.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="grid grid-cols-4 items-center gap-4">
+                      <Label htmlFor="qty" className="text-right">Quantity</Label>
+                      <Input
+                        id="qty"
+                        type="number"
+                        className="col-span-3"
+                        value={quantity}
+                        onChange={(e)=>setQuantity(e.target.value)}
+                        min={0}
+                      />
+                    </div>
+                  </>
+                )}
                 <div className="grid grid-cols-4 items-center gap-4">
                   <Label htmlFor="category" className="text-right">Category</Label>
                   <select id="category" className="col-span-3 border rounded-md p-2" value={newExpense.category} onChange={(e)=>setNewExpense({...newExpense, category: e.target.value})}>
@@ -236,8 +289,8 @@ const LabExpenses = () => {
                 </div>
               </div>
               <DialogFooter>
-                <Button variant="outline" onClick={()=>setIsAddOpen(false)}>Cancel</Button>
-                <Button onClick={addExpense}>Save</Button>
+                <Button variant="outline" onClick={()=>{ setIsAddOpen(false); setEditingExpense(null); }}>Cancel</Button>
+                <Button onClick={saveExpense}>{editingExpense ? "Update" : "Save"}</Button>
               </DialogFooter>
             </DialogContent>
           </Dialog>
@@ -260,8 +313,8 @@ const LabExpenses = () => {
           <CardTitle>Expenses</CardTitle>
           <CardDescription>Recent expenses</CardDescription>
         </CardHeader>
-        <CardContent>
-          <div className="space-y-3">
+        <CardContent className="overflow-x-auto">
+          <div className="space-y-3 min-w-full">
             {pageItems.map(e => (
               <div key={e.id} className="flex items-center justify-between p-3 border rounded-md">
                 <div>
@@ -276,7 +329,25 @@ const LabExpenses = () => {
                   )}
                   <div className="text-xs text-gray-500">{e.date.toLocaleDateString()} {e.reference ? `• Ref: ${e.reference}` : ''}</div>
                 </div>
-                <div className="text-red-600 font-bold">- PKR {e.amount.toFixed(2)}</div>
+                <div className="flex items-center gap-3">
+                  <div className="text-red-600 font-bold">- PKR {e.amount.toFixed(2)}</div>
+                  <div className="flex flex-col gap-1">
+                    <button
+                      type="button"
+                      className="p-1 rounded-md border text-gray-600 hover:bg-gray-50"
+                      onClick={() => startEdit(e)}
+                    >
+                      <Edit3 className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      className="p-1 rounded-md border text-red-600 hover:bg-red-50"
+                      onClick={() => handleDelete(e.id)}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
               </div>
             ))}
             {pageItems.length === 0 && (

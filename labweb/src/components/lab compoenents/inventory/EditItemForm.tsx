@@ -76,7 +76,7 @@ const EditItemForm: React.FC<EditItemFormProps> = ({ onClose, onUpdateItem, dbCa
 
     const token = localStorage.getItem('token');
     try {
-      const res = await fetch(`${API_BASE}/inventory/${editedItem._id}`, {
+      const res = await fetch(`${API_BASE}/${editedItem._id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -84,7 +84,8 @@ const EditItemForm: React.FC<EditItemFormProps> = ({ onClose, onUpdateItem, dbCa
         },
         body: JSON.stringify({
           ...editedItem,
-          category: editedItem.category._id, // backend expects id
+          // keep category shape consistent with create: embedded object {_id, name}
+          category: editedItem.category,
           // pack-based
           packs: parseFloat(packs) || 0,
           itemsPerPack: parseFloat(itemsPerPack) || 0,

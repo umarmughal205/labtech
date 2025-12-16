@@ -74,6 +74,33 @@ const UpdateStockDialog: React.FC<Props> = ({ itemId, items, currentUnitsPerPack
       const targetId = selectedId || itemId;
       if (!targetId) throw new Error('Please select an item');
       await api.put(`/lab/inventory/${targetId}`, payload);
+
+      // If user is actually adding stock (packs > 0 and buy price > 0),
+      // also create a LabExpense so the purchase appears in Expenses + Finance ledger.
+      const packsNum = parseFloat(packs) || 0;
+      const itemsPerPackNum = parseFloat(itemsPerPack) || 0;
+      const buyPerPackNum = parseFloat(buyPricePerPack) || 0;
+      const totalUnits = packsNum * itemsPerPackNum;
+      const amount = packsNum * buyPerPackNum;
+
+      if (packsNum > 0 && buyPerPackNum > 0 && totalUnits > 0) {
+        try {
+          const itemName = items?.find((it) => it._id === targetId)?.name;
+          await api.post("/lab/expenses", {
+            category: "Supplies",
+            description: itemName
+              ? `Stock update via inventory for ${itemName}`
+              : "Stock update via inventory",
+            amount,
+            date: new Date().toISOString(),
+            inventoryItemId: targetId,
+            inventoryItemName: itemName,
+            quantity: totalUnits,
+          });
+        } catch (expenseErr) {
+          console.error("Failed to create expense for stock update", expenseErr);
+        }
+      }
       await onUpdated();
       onClose();
     } catch (e) {

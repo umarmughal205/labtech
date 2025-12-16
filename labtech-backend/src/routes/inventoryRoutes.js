@@ -1,4 +1,5 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const InventoryItem = require('../models/InventoryItem');
 const { verifyToken } = require('../middleware/authMiddleware');
 
@@ -18,7 +19,14 @@ router.get('/', async (req, res) => {
 // GET /api/lab/inventory/:id - get single inventory item by id
 router.get('/:id', async (req, res) => {
   try {
-    const item = await InventoryItem.findById(req.params.id);
+    const { id } = req.params;
+
+    // Guard against invalid ObjectId values (e.g. literal string "inventory")
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: 'Invalid inventory id' });
+    }
+
+    const item = await InventoryItem.findById(id);
     if (!item) {
       return res.status(404).json({ message: 'Inventory item not found' });
     }

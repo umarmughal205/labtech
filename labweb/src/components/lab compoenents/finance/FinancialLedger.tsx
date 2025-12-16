@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -32,6 +32,7 @@ import {
   Search,
   Filter,
   Calendar,
+  RefreshCw,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -46,13 +47,8 @@ import {
   Tooltip as RechartsTooltip,
   Legend,
 } from "recharts";
-import {
-  useIpdFinanceRecords,
-  useIpdFinanceSummary,
-  useCreateIpdFinanceRecord,
-  FinanceRecord,
-} from "@/hooks/useIpdFinanceApi";
-import { getAllLedgerEntries, LabLedgerEntry } from "@/components/lab compoenents/finance/labFinanceStore";
+import { FinanceRecord } from "@/hooks/useIpdFinanceApi";
+import { getAllLedgerEntries, addLedgerEntry, LabLedgerEntry } from "@/components/lab compoenents/finance/labFinanceStore";
 
 type LedgerDateRange = "last-30-days" | "last-90-days" | "this-year" | "all";
 type LedgerTxTypeFilter = "all" | "Income" | "Expense";
@@ -73,14 +69,48 @@ const formatCurrency = (amount: number) => {
   })}`;
 };
 
-const CATEGORY_COLORS = ["#2563eb", "#22c55e", "#f97316", "#a855f7"];
+// Compact representation for large amounts in header cards
+const formatCompact = (value: number): string => {
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000_000) {
+    return `${(value / 1_000_000_000).toFixed(2)}B`;
+  }
+  if (abs >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(2)}M`;
+  }
+  if (abs >= 1_000) {
+    return `${(value / 1_000).toFixed(2)}K`;
+  }
+  return value.toFixed(2);
+};
+
+const CATEGORY_COLORS = ["#2563eb", "#22c55e", "#ef4444", "#f97316", "#a855f7"];
 
 const getCategoryColor = (label: string, index: number) => {
+  if (label === "Lab Bills") return "#22c55e";
+  if (label === "Utilities") return "#2563eb";
+  if (label === "Salaries") return "#ef4444";
+  if (label === "Supplies") return "#f97316";
+
   const lower = label.toLowerCase();
   if (lower.includes("sample")) return "#2563eb";
   if (lower.includes("payment")) return "#22c55e";
   if (lower.includes("expense")) return "#f97316";
   return CATEGORY_COLORS[index % CATEGORY_COLORS.length];
+};
+
+const formatCategoryPercent = (percent: number): string => {
+  if (percent > 0 && percent < 0.1) {
+    return "<0.1%";
+  }
+  return `${percent.toFixed(1)}%`;
+};
+
+const formatReportingPercent = (percent: number): string => {
+  if (percent <= 0) return "0%";
+  if (percent < 1) return "1.0%";
+  if (percent > 100) return "100.0%";
+  return `${percent.toFixed(1)}%`;
 };
 
 const getDateLimit = (range: LedgerDateRange) => {
@@ -96,31 +126,52 @@ const getDateLimit = (range: LedgerDateRange) => {
 };
 
 const FinancialLedger: React.FC = () => {
-  const { data: summary } = useIpdFinanceSummary();
-  const {
-    data: recordsData,
-    isLoading: recordsLoading,
-  } = useIpdFinanceRecords();
-  const records: FinanceRecord[] = recordsData ?? [];
+  const [baseRecords, setBaseRecords] = useState<FinanceRecord[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
 
-  // Fallback to labFinanceStore when IPD finance API has no data
-  const ledgerFallback: FinanceRecord[] = useMemo(() => {
-    const entries: LabLedgerEntry[] = getAllLedgerEntries();
-    if (!Array.isArray(entries) || entries.length === 0) return [];
-    return entries.map((e) => ({
-      _id: e.id,
-      date: e.date,
-      amount: e.amount,
-      category: e.category,
-      description: e.description,
-      department: "Lab",
-      type: e.type === "income" ? "Income" : "Expense",
-      recordedBy: "Lab Ledger",
-      patientId: undefined,
-    })) as FinanceRecord[];
+  const refreshLedgerData = async () => {
+    try {
+      const entries: LabLedgerEntry[] = await getAllLedgerEntries();
+      const mapped: FinanceRecord[] = entries.map((e) => ({
+        _id: e.id,
+        date: e.date,
+        amount: e.amount,
+        category: e.category,
+        description: e.description,
+        department: "Lab",
+        type: e.type === "income" ? "Income" : "Expense",
+        recordedBy: "Lab Ledger",
+        patientId: undefined,
+      })) as FinanceRecord[];
+      setBaseRecords(mapped);
+    } catch (err) {
+      console.error("Failed to refresh lab financial ledger entries", err as any);
+      setBaseRecords([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Load all ledger entries from labFinanceStore backend (/lab/finance)
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      await refreshLedgerData();
+    })();
   }, []);
 
-  const baseRecords: FinanceRecord[] = records.length > 0 ? records : ledgerFallback;
+  // Auto-refresh ledger data periodically so the view stays in sync
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      try {
+        await refreshLedgerData();
+      } catch (err) {
+        console.error("Failed to auto-refresh lab financial ledger entries", err as any);
+      }
+    }, 45000); // ~45 seconds
+
+    return () => clearInterval(interval);
+  }, []);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [reportType, setReportType] = useState("financial-summary");
@@ -134,6 +185,7 @@ const FinancialLedger: React.FC = () => {
   const pageSize = 10;
 
   const [isAddOpen, setIsAddOpen] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [newEntry, setNewEntry] = useState<NewEntryForm>({
     date: new Date().toISOString().slice(0, 10),
     type: "Income",
@@ -143,22 +195,15 @@ const FinancialLedger: React.FC = () => {
     patientId: "",
   });
 
-  const createMutation = useCreateIpdFinanceRecord();
-
   const metrics = useMemo(() => {
-    let income = summary?.totalIncome ?? 0;
-    let expense = summary?.totalExpense ?? 0;
+    const income = baseRecords
+      .filter((r) => r.type === "Income")
+      .reduce((sum, r) => sum + (r.amount || 0), 0);
+    const expense = baseRecords
+      .filter((r) => r.type === "Expense")
+      .reduce((sum, r) => sum + (r.amount || 0), 0);
 
-    if (!summary) {
-      income = baseRecords
-        .filter((r) => r.type === "Income")
-        .reduce((sum, r) => sum + (r.amount || 0), 0);
-      expense = baseRecords
-        .filter((r) => r.type === "Expense")
-        .reduce((sum, r) => sum + (r.amount || 0), 0);
-    }
-
-    const net = summary?.netBalance ?? income - expense;
+    const net = income - expense;
     const pendingCount = baseRecords.length;
     const pendingTotal = baseRecords.reduce((sum, r) => sum + (r.amount || 0), 0);
 
@@ -169,7 +214,7 @@ const FinancialLedger: React.FC = () => {
       pendingCount,
       pendingTotal,
     };
-  }, [summary, baseRecords]);
+  }, [baseRecords]);
 
   const filteredRecords = useMemo(() => {
     const search = searchTerm.toLowerCase().trim();
@@ -219,19 +264,45 @@ const FinancialLedger: React.FC = () => {
   const pageItems = recordsWithBalance.slice(startIdx, endIdx);
 
   const categoryBreakdown = useMemo(() => {
-    const totals: Record<string, number> = {};
+    // We want the detailed reporting pie chart to focus on four key buckets:
+    // 1) Lab Bills (sample test fee income)
+    // 2) Utilities (expense)
+    // 3) Salaries (expense)
+    // 4) Supplies (expense)
+    const buckets: Record<string, number> = {
+      "Lab Bills": 0,
+      Utilities: 0,
+      Salaries: 0,
+      Supplies: 0,
+    };
+
     for (const r of baseRecords) {
-      const key = r.category || "Uncategorized";
-      totals[key] = (totals[key] || 0) + (r.amount || 0);
+      const cat = r.category || "";
+
+      // Lab Bills: count only income side (sample test fee profit)
+      if (cat === "Lab Bills" && r.type === "Income") {
+        buckets["Lab Bills"] += r.amount || 0;
+        continue;
+      }
+
+      // Expense buckets: only count expenses for these categories
+      if (r.type === "Expense") {
+        if (cat === "Utilities") {
+          buckets["Utilities"] += r.amount || 0;
+        } else if (cat === "Salaries") {
+          buckets["Salaries"] += r.amount || 0;
+        } else if (cat === "Supplies") {
+          buckets["Supplies"] += r.amount || 0;
+        }
+      }
     }
-    const entries = Object.entries(totals).sort((a, b) => b[1] - a[1]);
-    const top = entries.slice(0, 3);
-    const othersTotal = entries.slice(3).reduce((sum, [, v]) => sum + v, 0);
-    if (othersTotal > 0) {
-      top.push(["Other", othersTotal]);
-    }
+
+    // Build list, excluding zero buckets so the chart only shows relevant slices
+    const entries = Object.entries(buckets).filter(([, value]) => value > 0);
+    if (!entries.length) return [] as { label: string; value: number; percent: number }[];
+
     const grandTotal = entries.reduce((sum, [, v]) => sum + v, 0) || 1;
-    return top.map(([label, value]) => ({
+    return entries.map(([label, value]) => ({
       label,
       value,
       percent: (value / grandTotal) * 100,
@@ -251,9 +322,9 @@ const FinancialLedger: React.FC = () => {
       if (r.type === "Income") buckets[ym].income += r.amount || 0;
       if (r.type === "Expense") buckets[ym].expense += r.amount || 0;
     }
-    const keys = Object.keys(buckets).sort().slice(-6);
-    return keys.map((k) => ({
-      monthKey: k,
+    const sortedKeys = Object.keys(buckets).sort();
+    return sortedKeys.map((k) => ({
+      month: k,
       monthLabel: buckets[k].label,
       income: buckets[k].income,
       expense: buckets[k].expense,
@@ -261,9 +332,9 @@ const FinancialLedger: React.FC = () => {
   }, [baseRecords]);
 
   const handleExportCsv = () => {
-    const rows = filteredRecords.length ? filteredRecords : baseRecords;
-    if (!rows.length) return;
+    if (!baseRecords.length) return;
 
+    const rows = baseRecords;
     const headers = [
       "Date",
       "Type",
@@ -297,6 +368,75 @@ const FinancialLedger: React.FC = () => {
     a.download = `financial_ledger_${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  const handleExportPdf = () => {
+    try {
+      const win = window.open("", "_blank");
+      if (!win) return;
+
+      const doc = win.document;
+      const now = new Date();
+      const generatedAt = now.toLocaleString();
+
+      const categoryRows = categoryBreakdown
+        .map((c, index) => {
+          const color = getCategoryColor(c.label, index);
+          const percentText = formatCategoryPercent(c.percent);
+          const amountText = formatCurrency(c.value).replace("PKR ", "");
+          return `
+            <tr>
+              <td style="padding:4px 8px;">
+                <span style="display:inline-block;width:10px;height:10px;border-radius:9999px;background:${color};margin-right:6px;"></span>
+                <span>${c.label}</span>
+              </td>
+              <td style="padding:4px 8px;text-align:right;">${amountText}</td>
+              <td style="padding:4px 8px;text-align:right;">${percentText}</td>
+            </tr>`;
+        })
+        .join("");
+
+      doc.write(`<!DOCTYPE html>
+<html>
+  <head>
+    <meta charSet="utf-8" />
+    <title>Financial Ledger Report</title>
+    <style>
+      body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: 24px; color: #111827; }
+      h1 { font-size: 20px; margin-bottom: 4px; }
+      h2 { font-size: 16px; margin-top: 24px; margin-bottom: 8px; }
+      table { width: 100%; border-collapse: collapse; font-size: 12px; }
+      th, td { border-bottom: 1px solid #e5e7eb; }
+      th { text-align: left; padding: 6px 8px; background:#f9fafb; }
+      .meta { font-size: 11px; color:#6b7280; margin-bottom: 16px; }
+    </style>
+  </head>
+  <body>
+    <h1>Financial Ledger Report</h1>
+    <div class="meta">Generated at: ${generatedAt}</div>
+
+    <h2>Category Breakdown</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Category</th>
+          <th style="text-align:right;">Amount (PKR)</th>
+          <th style="text-align:right;">Percent</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${categoryRows || "<tr><td colspan=\"3\" style=\"padding:8px;\">No category data.</td></tr>"}
+      </tbody>
+    </table>
+  </body>
+</html>`);
+
+      doc.close();
+      win.focus();
+      win.print();
+    } catch (err) {
+      console.error("Failed to export PDF", err);
+    }
   };
 
   const handleGenerateReport = () => {
@@ -356,44 +496,66 @@ const FinancialLedger: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
-  const handleAddEntry = () => {
+  const handleAddEntry = async () => {
     if (!newEntry.description || !newEntry.amount) return;
+    const amountNum = parseFloat(newEntry.amount);
+    const payloadCategory = newEntry.category || "General";
+    const ledgerType = newEntry.type === "Income" ? "income" : "expense";
 
-    const payload = {
-      date: newEntry.date,
-      amount: parseFloat(newEntry.amount),
-      category: newEntry.category || "General",
-      description: newEntry.description,
-      department: "Lab" as const,
-      type: newEntry.type,
-      patientId: newEntry.patientId || undefined,
-    };
+    try {
+      setIsSaving(true);
+      const created = await addLedgerEntry({
+        type: ledgerType,
+        source: "Manual",
+        category: payloadCategory,
+        description: newEntry.description,
+        amount: amountNum,
+        date: new Date(newEntry.date).toISOString(),
+        reference: newEntry.patientId || undefined,
+      });
 
-    createMutation.mutate(payload, {
-      onSuccess: () => {
-        setIsAddOpen(false);
-        setNewEntry({
-          date: new Date().toISOString().slice(0, 10),
-          type: "Income",
-          amount: "",
-          category: "General",
-          description: "",
-          patientId: "",
-        });
-      },
-    });
+      const rec: FinanceRecord = {
+        _id: created.id,
+        date: created.date,
+        amount: created.amount,
+        category: created.category,
+        description: created.description,
+        department: "Lab",
+        type: newEntry.type,
+        recordedBy: "Manual",
+        patientId: newEntry.patientId || undefined,
+      } as FinanceRecord;
+
+      setBaseRecords((prev) => [...prev, rec]);
+      setIsAddOpen(false);
+      setNewEntry({
+        date: new Date().toISOString().slice(0, 10),
+        type: "Income",
+        amount: "",
+        category: "General",
+        description: "",
+        patientId: "",
+      });
+    } catch (err) {
+      console.error("Failed to add manual ledger entry", err as any);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
-    <div className="p-6 space-y-6 bg-slate-50">
+    <div className="p-4 md:p-6 space-y-6 bg-slate-50">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Financial Ledger</h1>
+          <h1 className="text-xl md:text-2xl font-bold text-gray-900">Financial Ledger</h1>
           <p className="text-sm text-gray-600">
             Track all financial transactions and activity logs.
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="outline" size="icon" onClick={refreshLedgerData}>
+            <RefreshCw className="w-4 h-4" />
+          </Button>
           <Button variant="outline" onClick={handleExportCsv}>
             <Download className="w-4 h-4 mr-2" />
             Export Ledger
@@ -412,8 +574,8 @@ const FinancialLedger: React.FC = () => {
               <p className="text-xs font-medium text-gray-500 uppercase">
                 Total Income
               </p>
-              <p className="mt-2 text-2xl font-bold text-emerald-600">
-                {formatCurrency(metrics.totalIncome)}
+              <p className="mt-2 text-lg md:text-2xl font-bold text-emerald-600 break-words">
+                PKR {formatCompact(metrics.totalIncome)}
               </p>
             </div>
           </CardContent>
@@ -425,8 +587,8 @@ const FinancialLedger: React.FC = () => {
               <p className="text-xs font-medium text-gray-500 uppercase">
                 Total Expenses
               </p>
-              <p className="mt-2 text-2xl font-bold text-red-600">
-                {formatCurrency(metrics.totalExpense)}
+              <p className="mt-2 text-lg md:text-2xl font-bold text-red-600 break-words">
+                PKR {formatCompact(metrics.totalExpense)}
               </p>
             </div>
           </CardContent>
@@ -438,7 +600,7 @@ const FinancialLedger: React.FC = () => {
               <p className="text-xs font-medium text-gray-500 uppercase">
                 Net Balance
               </p>
-              <p className="mt-2 text-2xl font-bold">
+              <p className="mt-2 text-lg md:text-2xl font-bold break-words">
                 <span
                   className={
                     metrics.netBalance >= 0
@@ -446,7 +608,7 @@ const FinancialLedger: React.FC = () => {
                       : "text-red-600"
                   }
                 >
-                  {formatCurrency(metrics.netBalance)}
+                  PKR {formatCompact(metrics.netBalance)}
                 </span>
               </p>
             </div>
@@ -459,7 +621,7 @@ const FinancialLedger: React.FC = () => {
               <p className="text-xs font-medium text-gray-500 uppercase">
                 Total Transactions
               </p>
-              <p className="mt-2 text-2xl font-bold text-blue-900">
+              <p className="mt-2 text-lg md:text-2xl font-bold text-blue-900 break-words">
                 {metrics.pendingCount}
               </p>
             </div>
@@ -548,6 +710,7 @@ const FinancialLedger: React.FC = () => {
                     variant="outline"
                     size="sm"
                     className="flex-1"
+                    onClick={handleExportPdf}
                   >
                     PDF
                   </Button>
@@ -578,10 +741,18 @@ const FinancialLedger: React.FC = () => {
                           ))}
                         </Pie>
                         <RechartsTooltip
-                          formatter={(val: any, _name, item: any) => [
-                            formatCurrency(Number(val) || 0),
-                            item?.payload?.label ?? "Amount",
-                          ]}
+                          formatter={(val: any, _name, item: any) => {
+                            const amount = formatCurrency(Number(val) || 0);
+                            const percent =
+                              typeof item?.payload?.percent === "number"
+                                ? formatReportingPercent(item.payload.percent)
+                                : "";
+                            const label = item?.payload?.label ?? "Amount";
+                            return [
+                              percent ? `${amount} (${percent})` : amount,
+                              label,
+                            ];
+                          }}
                         />
                       </PieChart>
                     </ResponsiveContainer>
@@ -602,7 +773,7 @@ const FinancialLedger: React.FC = () => {
                           <span className="text-gray-700">{c.label}</span>
                         </div>
                         <span className="text-gray-500">
-                          {c.percent.toFixed(1)}%
+                          {formatReportingPercent(c.percent)}
                         </span>
                       </div>
                     ))}
@@ -758,8 +929,8 @@ const FinancialLedger: React.FC = () => {
           </div>
         </CardHeader>
         <CardContent className="pt-0">
-          <div className="border rounded-lg overflow-hidden">
-            <Table>
+          <div className="border rounded-lg overflow-x-auto">
+            <Table className="min-w-full">
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-[120px]">Date</TableHead>
@@ -772,7 +943,7 @@ const FinancialLedger: React.FC = () => {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {recordsLoading && (
+                {loading && (
                   <TableRow>
                     <TableCell colSpan={7} className="text-center text-sm py-6">
                       Loading transactions...
@@ -780,7 +951,7 @@ const FinancialLedger: React.FC = () => {
                   </TableRow>
                 )}
 
-                {!recordsLoading && pageItems.length === 0 && (
+                {!loading && pageItems.length === 0 && (
                   <TableRow>
                     <TableCell colSpan={7} className="text-center text-sm py-6">
                       No transactions found.
@@ -788,7 +959,7 @@ const FinancialLedger: React.FC = () => {
                   </TableRow>
                 )}
 
-                {!recordsLoading &&
+                {!loading &&
                   pageItems.map((r) => {
                     const signedAmount = r.type === "Income" ? r.amount : -r.amount;
                     const isIncome = r.type === "Income";
@@ -967,8 +1138,8 @@ const FinancialLedger: React.FC = () => {
             <Button variant="outline" onClick={() => setIsAddOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={handleAddEntry} disabled={createMutation.isPending}>
-              {createMutation.isPending ? "Saving..." : "Save Entry"}
+            <Button onClick={handleAddEntry} disabled={isSaving}>
+              {isSaving ? "Saving..." : "Save Entry"}
             </Button>
           </DialogFooter>
         </DialogContent>

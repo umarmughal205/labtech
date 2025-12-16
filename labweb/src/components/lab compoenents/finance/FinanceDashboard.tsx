@@ -13,7 +13,8 @@ import {
   Calendar,
   Search,
   Download,
-  Filter
+  Filter,
+  RefreshCw
 } from "lucide-react";
 import { getAllLedgerEntries, LabLedgerEntry } from "@/components/lab compoenents/finance/labFinanceStore";
 import { api } from "@/lib/api";
@@ -32,6 +33,21 @@ interface NewExpenseForm {
   description: string;
   amount: string;
   category: string;
+}
+
+// Format large numbers into compact form: 1,500 -> 1.5K, 1,000,000 -> 1M, etc.
+function formatCompactAmount(value: number): string {
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000_000) {
+    return `${(value / 1_000_000_000).toFixed(2)}B`;
+  }
+  if (abs >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(2)}M`;
+  }
+  if (abs >= 1_000) {
+    return `${(value / 1_000).toFixed(2)}K`;
+  }
+  return value.toFixed(2);
 }
 
 
@@ -64,26 +80,46 @@ const FinanceDashboard = () => {
   const [pageSize, setPageSize] = useState<number>(10);
   const txSectionRef = useRef<HTMLDivElement | null>(null);
 
+  const refreshFinanceData = async () => {
+    try {
+      const entries = await getAllLedgerEntries();
+      const mapped: FinanceRecord[] = entries.map((e: LabLedgerEntry) => ({
+        id: e.id,
+        type: e.type,
+        category: e.category,
+        description: e.description,
+        amount: e.amount,
+        date: new Date(e.date),
+        reference: e.reference,
+      }));
+      setFinanceData(mapped);
+    } catch (err) {
+      console.error("Failed to refresh finance ledger entries", err as any);
+    }
+  };
+
   // load transactions from backend finance ledger
   useEffect(() => {
     (async () => {
       try {
-        const entries = await getAllLedgerEntries();
-        const mapped: FinanceRecord[] = entries.map((e: LabLedgerEntry) => ({
-          id: e.id,
-          type: e.type,
-          category: e.category,
-          description: e.description,
-          amount: e.amount,
-          date: new Date(e.date),
-          reference: e.reference,
-        }));
-        setFinanceData(mapped);
-      } catch (err) {
-        console.error("Failed to load finance ledger entries", err as any);
+        await refreshFinanceData();
+      } catch {
         setFinanceData([]);
       }
     })();
+  }, []);
+
+  // Auto-refresh finance data periodically so dashboard stays in sync
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      try {
+        await refreshFinanceData();
+      } catch (err) {
+        console.error("Failed to auto-refresh finance ledger entries", err as any);
+      }
+    }, 45000); // ~45 seconds
+
+    return () => clearInterval(interval);
   }, []);
 
   // fetch inventory for stock value (backend API)
@@ -191,13 +227,16 @@ const FinanceDashboard = () => {
   };
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 md:p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Finance Dashboard</h1>
+          <h1 className="text-xl md:text-2xl font-bold text-gray-900">Finance Dashboard</h1>
           <p className="text-sm text-gray-600">Track income, expenses, and profitability</p>
         </div>
         <div className="flex space-x-2">
+          <Button variant="outline" size="icon" className="mr-2" onClick={refreshFinanceData}>
+            <RefreshCw className="w-4 h-4" />
+          </Button>
           <Button variant="outline" className="mr-2" onClick={handleExport}>
             <Download className="w-4 h-4 mr-2" />
             Export Report
@@ -212,7 +251,10 @@ const FinanceDashboard = () => {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-gray-600">Total Income</p>
-                <p className="text-2xl font-bold text-green-600">PKR {getTotalIncome().toFixed(2)}</p>
+                <p className="text-sm font-medium text-gray-500">PKR</p>
+                <p className="text-base md:text-xl font-bold text-green-600 break-words leading-tight">
+                  {formatCompactAmount(getTotalIncome())}
+                </p>
                 <p className="text-xs text-gray-500">This month</p>
               </div>
               <TrendingUp className="w-8 h-8 text-green-500" />
@@ -225,7 +267,10 @@ const FinanceDashboard = () => {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-gray-600">Total Expenses</p>
-                <p className="text-2xl font-bold text-red-600">PKR {getTotalExpenses().toFixed(2)}</p>
+                <p className="text-sm font-medium text-gray-500">PKR</p>
+                <p className="text-base md:text-xl font-bold text-red-600 break-words leading-tight">
+                  {formatCompactAmount(getTotalExpenses())}
+                </p>
                 <p className="text-xs text-gray-500">This month</p>
               </div>
               <TrendingDown className="w-8 h-8 text-red-500" />
@@ -238,8 +283,9 @@ const FinanceDashboard = () => {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-gray-600">Net Profit</p>
-                <p className={`text-2xl font-bold ${getNetProfit() >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                  PKR {(getNetProfit()/1000).toFixed(1)}K
+                <p className="text-sm font-medium text-gray-500">PKR</p>
+                <p className={`text-base md:text-xl font-bold break-words leading-tight ${getNetProfit() >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                  {formatCompactAmount(getNetProfit())}
                 </p>
                 <p className="text-xs text-gray-500">This month</p>
               </div>
@@ -253,7 +299,10 @@ const FinanceDashboard = () => {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-gray-600">Total Purchases</p>
-                <p className="text-2xl font-bold text-blue-900">PKR {getTotalPurchasesThisMonth().toFixed(2)}</p>
+                <p className="text-sm font-medium text-gray-500">PKR</p>
+                <p className="text-base md:text-xl font-bold text-blue-900 break-words leading-tight">
+                  {formatCompactAmount(getTotalPurchasesThisMonth())}
+                </p>
                 <p className="text-xs text-gray-500">Supplies • This month</p>
               </div>
               {/* removed View Details button */}
@@ -266,7 +315,10 @@ const FinanceDashboard = () => {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-gray-600">Total Stock Value</p>
-                <p className="text-2xl font-bold text-purple-800">PKR {getTotalStockValue().toFixed(2)}</p>
+                <p className="text-sm font-medium text-gray-500">PKR</p>
+                <p className="text-base md:text-xl font-bold text-purple-800 break-words leading-tight">
+                  {formatCompactAmount(getTotalStockValue())}
+                </p>
                 <p className="text-xs text-gray-500">Current inventory</p>
               </div>
               {/* removed View Details button */}
@@ -317,8 +369,8 @@ const FinanceDashboard = () => {
           <CardTitle>Recent Transactions</CardTitle>
           <CardDescription>Latest financial activities</CardDescription>
         </CardHeader>
-        <CardContent>
-          <div className="space-y-4">
+        <CardContent className="overflow-x-auto">
+          <div className="space-y-4 min-w-full">
             {pageItems.map((record) => (
               <div key={record.id} className="flex items-center justify-between p-4 border rounded-lg hover:bg-gray-50">
                 <div className="flex items-center space-x-4">

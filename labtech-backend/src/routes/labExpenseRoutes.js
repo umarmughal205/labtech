@@ -114,10 +114,61 @@ router.delete('/:id', verifyToken, async (req, res) => {
       return res.status(404).json({ message: 'Expense not found' });
     }
 
+    // Best-effort: also remove mirrored finance ledger entry for this expense
+    try {
+      await LabFinanceEntry.findOneAndDelete({ reference: String(id) }).lean();
+    } catch (finErr) {
+      console.error('Failed to delete mirrored finance entry for expense:', finErr);
+      // Do not fail the main delete because of finance sync issues
+    }
+
     return res.json({ success: true });
   } catch (err) {
     console.error('Error deleting lab expense:', err);
     return res.status(500).json({ message: 'Failed to delete expense' });
+  }
+});
+
+// PUT /api/lab/expenses/:id
+router.put('/:id', verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params || {};
+    if (!id) {
+      return res.status(400).json({ message: 'Missing expense id' });
+    }
+
+    const body = req.body || {};
+
+    const update = {};
+    if (body.category !== undefined) update.category = body.category;
+    if (body.description !== undefined) update.description = body.description;
+    if (body.amount !== undefined) update.amount = Number(body.amount) || 0;
+    if (body.date !== undefined) update.date = new Date(body.date);
+    if (body.reference !== undefined) update.reference = body.reference;
+
+    const updated = await LabExpense.findByIdAndUpdate(id, update, { new: true }).lean();
+    if (!updated) {
+      return res.status(404).json({ message: 'Expense not found' });
+    }
+
+    // Try to keep the mirrored finance entry in sync
+    try {
+      const finUpdate = {
+        category: updated.category,
+        description: updated.description,
+        amount: Number(updated.amount) || 0,
+        date: updated.date,
+      };
+      await LabFinanceEntry.findOneAndUpdate({ reference: String(id) }, finUpdate).lean();
+    } catch (finErr) {
+      console.error('Failed to update mirrored finance entry for expense:', finErr);
+      // Do not fail the main update because of finance sync issues
+    }
+
+    return res.json(updated);
+  } catch (err) {
+    console.error('Error updating lab expense:', err);
+    return res.status(500).json({ message: 'Failed to update expense' });
   }
 });
 

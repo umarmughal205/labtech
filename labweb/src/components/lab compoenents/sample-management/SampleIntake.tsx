@@ -720,6 +720,35 @@ const SampleIntakeClean = ({ onNavigateBack }: SampleIntakeProps) => {
   // refs for Enter navigation
   const phoneRef = useRef<HTMLInputElement>(null);
 
+  // Autofill patient info from profiling by CNIC or phone
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      const cnic = (patientInfo.cnic || "").trim();
+      const phone = (patientInfo.phone || "").trim();
+      if (!cnic && !phone) return;
+      try {
+        const res = await api.get("/profiling/lookup", {
+          params: { cnic: cnic || undefined, phone: phone || undefined },
+        });
+        const profile = res?.data?.profile;
+        if (profile) {
+          setPatientInfo((prev) => ({
+            ...prev,
+            name: profile.name || prev.name,
+            phone: profile.phone || prev.phone,
+            cnic: profile.cnic || prev.cnic,
+            age: profile.age ?? prev.age,
+            gender: profile.gender || prev.gender,
+            address: profile.address || prev.address,
+          }));
+        }
+      } catch (e) {
+        // silent fail; profiling is optional
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [patientInfo.cnic, patientInfo.phone]);
+
   useEffect(() => {
     try {
       const raw = localStorage.getItem('intakePrefill');

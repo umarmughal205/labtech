@@ -49,8 +49,9 @@ api.interceptors.request.use((config) => {
     } else {
       // Dev convenience headers only when no token at all
       const headers = (config.headers ?? {}) as any;
-      if (!headers['x-user-id']) headers['x-user-id'] = 'dev-lab-user';
-      if (!headers['x-user-role']) headers['x-user-role'] = 'labTech';
+      if (!headers['x-user-id']) headers['x-user-id'] = 'dev-admin-user';
+      // Use admin so admin-protected routes (/staff, /attendance) work in dev
+      if (!headers['x-user-role']) headers['x-user-role'] = 'admin';
       config.headers = headers;
     }
   } catch {}
